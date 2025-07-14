@@ -27,4 +27,4 @@ jobs:
       - name: Build the Docker image
         run: |
           echo running on branch ${GITHUB_REF##*/}
-          export BP_JVM_TYPE=JDK && ./gradlew --no-daemon --max-workers 1 -Pversion=78.1.0 bootBuildImage --imageName docker.io/cloudfoundry/uaa:78.1.0 --publishImage
+          export BP_JVM_TYPE=JDK && ./gradlew --no-daemon --max-workers 1 -Pversion=78.1.0 bootBuildImage --imageName docker.io/cfidentity/uaa:78.1.0 --publishImage
