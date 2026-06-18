@@ -46,6 +46,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
@@ -264,6 +266,18 @@ class ScimUserBootstrapTests {
         joe = joe.authorities(AuthorityUtils.commaSeparatedStringToAuthorityList("openid,read"));
         ScimUserBootstrap bootstrap = new ScimUserBootstrap(jdbcScimUserProvisioning, scimUserService, jdbcScimGroupProvisioning, jdbcScimGroupMembershipManager, identityZoneManager, Collections.singletonList(joe), false, Collections.emptyList(), false);
         assertThatThrownBy(bootstrap::afterPropertiesSet).asInstanceOf(InstanceOfAssertFactories.throwable(InvalidPasswordException.class));
+    }
+
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = {"", "   "})
+    void cannotAddUserWithNoPasswordWhenOriginBlankOrUaa(String origin) {
+        // A null/blank origin is normalized to uaa during provisioning, so the empty-password
+        // validation must still apply here (and must not throw a NullPointerException).
+        UaaUser joe = new UaaUser("joe", "", "joe@test.org", "Joe", "User", origin, null);
+        joe = joe.authorities(AuthorityUtils.commaSeparatedStringToAuthorityList("openid,read"));
+        ScimUserBootstrap bootstrap = new ScimUserBootstrap(jdbcScimUserProvisioning, scimUserService, jdbcScimGroupProvisioning, jdbcScimGroupMembershipManager, identityZoneManager, Collections.singletonList(joe), false, Collections.emptyList(), false);
+        assertThatThrownBy(bootstrap::afterPropertiesSet).isInstanceOf(InvalidPasswordException.class);
     }
 
     @Test

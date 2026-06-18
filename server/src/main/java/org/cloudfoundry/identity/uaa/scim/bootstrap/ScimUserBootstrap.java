@@ -1,5 +1,6 @@
 package org.cloudfoundry.identity.uaa.scim.bootstrap;
 
+import com.google.common.annotations.VisibleForTesting;
 import org.cloudfoundry.identity.uaa.audit.event.EntityDeletedEvent;
 import org.cloudfoundry.identity.uaa.authentication.SystemAuthentication;
 import org.cloudfoundry.identity.uaa.authentication.manager.AuthEvent;
@@ -125,10 +126,11 @@ public class ScimUserBootstrap implements
         }
     }
 
+    @VisibleForTesting
     ScimUser getScimUser(UaaUser user) {
         List<ScimUser> users = scimUserProvisioning.query("userName eq \"" + user.getUsername() + "\"" +
                 " and origin eq \"" +
-                (user.getOrigin() == null ? OriginKeys.UAA : user.getOrigin()) + "\"", identityZoneManager.getCurrentIdentityZoneId());
+                (hasText(user.getOrigin()) ? user.getOrigin() : OriginKeys.UAA) + "\"", identityZoneManager.getCurrentIdentityZoneId());
 
         if (users.isEmpty() && StringUtils.hasText(user.getId())) {
             try {
@@ -148,7 +150,7 @@ public class ScimUserBootstrap implements
     private void addUser(UaaUser user) {
         ScimUser scimUser = getScimUser(user);
         if (scimUser == null) {
-            if (isEmpty(user.getPassword()) && user.getOrigin().equals(OriginKeys.UAA)) {
+            if (isEmpty(user.getPassword()) && (!hasText(user.getOrigin()) || OriginKeys.UAA.equals(user.getOrigin()))) {
                 logger.debug("User's password cannot be empty");
                 throw new InvalidPasswordException("Password cannot be empty", BAD_REQUEST);
             }
@@ -156,7 +158,7 @@ public class ScimUserBootstrap implements
             try {
                 createNewUser(user);
             } catch (ScimResourceAlreadyExistsException e) {
-                logger.debug("SCIM user concurrently created. Reconciling existing user: {}", user.getUsername());
+                logger.debug("SCIM user concurrently created. Reconciling existing user: {}", getCleanedUserControlString(user.getUsername()));
                 ScimUser concurrentUser = getScimUser(user);
                 if (concurrentUser == null) {
                     throw e;
@@ -176,6 +178,7 @@ public class ScimUserBootstrap implements
         }
     }
 
+    @VisibleForTesting
     void updateUser(ScimUser existingUser, UaaUser updatedUser) {
         updateUser(existingUser, updatedUser, true);
     }
