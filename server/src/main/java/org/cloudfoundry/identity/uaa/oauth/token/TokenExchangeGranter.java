@@ -153,7 +153,7 @@ public class TokenExchangeGranter extends AbstractTokenGranter {
             claims = externalOAuthAuthenticationManager.verifySubjectToken(subjectToken);
         } catch (AuthenticationException | InvalidTokenException e) {
             logger.debug("subject_token signature verification failed", e);
-            throw new InvalidGrantException("Invalid subject_token: " + e.getMessage());
+            throw new InvalidGrantException("Invalid subject_token");
         }
         String clientId = tokenRequest.getClientId();
         try {
