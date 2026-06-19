@@ -7,6 +7,7 @@ import org.cloudfoundry.identity.uaa.constants.OriginKeys;
 import org.cloudfoundry.identity.uaa.oauth.TokenTestSupport;
 import org.cloudfoundry.identity.uaa.oauth.UaaOauth2Authentication;
 import org.cloudfoundry.identity.uaa.oauth.common.exceptions.InvalidGrantException;
+import org.cloudfoundry.identity.uaa.oauth.common.exceptions.InvalidTokenException;
 import org.cloudfoundry.identity.uaa.oauth.common.util.OAuth2Utils;
 import org.cloudfoundry.identity.uaa.oauth.jwt.JwtHelper;
 import org.cloudfoundry.identity.uaa.oauth.provider.ClientDetails;
@@ -28,8 +29,6 @@ import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.security.authentication.InsufficientAuthenticationException;
 import org.springframework.security.core.context.SecurityContextHolder;
 
-import java.nio.charset.StandardCharsets;
-import java.util.Base64;
 import java.util.Collections;
 import java.util.Date;
 import java.util.HashMap;
@@ -46,6 +45,7 @@ import static org.cloudfoundry.identity.uaa.oauth.token.TokenConstants.TOKEN_TYP
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.same;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -289,89 +289,54 @@ class TokenExchangeGranterTests {
     }
 
     /**
-     * Verifies that {@link TokenExchangeGranter#getTokenActor} rejects a {@code subject_token}
-     * whose signature cannot be verified against the registered identity provider.
+     * Verifies that {@link TokenExchangeGranter#getTokenActor} translates every failure mode of
+     * {@link ExternalOAuthAuthenticationManager#verifySubjectToken} into {@link InvalidGrantException}.
      *
-     * <p>Provider resolution is driven by the token's {@code iss} claim: the granter looks up
-     * the registered IdP whose configured issuer matches the {@code iss} value, then verifies
-     * the JWT signature against that IdP's published keys. Any failure — unknown issuer, bad
-     * signature, or expired token — must be propagated as {@link InvalidGrantException}.
+     * <p>These are unit tests of the granter's contract with its collaborator, so
+     * {@code verifySubjectToken} is mocked. The granter catches two unrelated exception
+     * hierarchies — Spring Security's {@link org.springframework.security.core.AuthenticationException}
+     * (thrown by issuer resolution, e.g. when the {@code iss} claim maps to no registered IdP) and
+     * UAA's {@link InvalidTokenException} (thrown by signature/expiry/audience checks in
+     * {@code validateToken}) — and must map both to {@code invalid_grant} without leaking detail.
+     *
+     * <p>End-to-end cryptographic verification against real provider keys is covered by the
+     * MockMvc tests ({@code TokenExchangeDefaultConfigMockMvcTests} and
+     * {@code TokenExchangeSubjectTokenSignatureBypassMockMvcTests}).
      */
     @Nested
     class SubjectTokenSignatureVerification {
 
-        private String forgeSelfSignedJwt(String payloadJson) {
-            Base64.Encoder enc = Base64.getUrlEncoder().withoutPadding();
-            String header = enc.encodeToString(
-                    "{\"alg\":\"RS256\",\"typ\":\"JWT\"}".getBytes(StandardCharsets.UTF_8));
-            String payload = enc.encodeToString(payloadJson.getBytes(StandardCharsets.UTF_8));
-            // A real RS256 signature would be ~342 base64url chars derived from a private RSA key.
-            // This is plaintext gibberish — it cannot pass verification for any RSA public key.
-            String bogusSignature = enc.encodeToString(
-                    "FORGED-NOT-A-REAL-RSA-SIGNATURE".getBytes(StandardCharsets.UTF_8));
-            return header + "." + payload + "." + bogusSignature;
-        }
+        // Structurally valid JWT (matches UaaTokenUtils.isJwtToken) so the granter does not divert
+        // to the revocable-token store. The contents are irrelevant: verifySubjectToken is mocked.
+        private static final String SUBJECT_TOKEN = "header.payload.signature";
 
-        @Test
-        void getTokenActor_whenSubjectTokenHasBogusSignature_throwsInvalidGrant() {
-            // A JWT with a completely fabricated signature and an issuer that has no
-            // corresponding registered IdP.  resolveOriginProvider() looks up by iss,
-            // finds nothing, and throws InsufficientAuthenticationException.
-            String forgedJwt = forgeSelfSignedJwt(
-                    "{\"sub\":\"forged-privileged-user\"" +
-                    ",\"iss\":\"https://not-a-registered-idp.example.com\"" +
-                    ",\"user_name\":\"forged-admin\"" +
-                    ",\"user_id\":\"forged-user-id\"" +
-                    ",\"origin\":\"uaa\"}");
-
-            when(externalOAuthAuthenticationManager.verifySubjectToken(forgedJwt))
-                    .thenThrow(new InsufficientAuthenticationException("Unable to map issuer to a registered provider"));
-
-            requestParameters.put("subject_token", forgedJwt);
+        @BeforeEach
+        void setUpSubjectToken() {
+            requestParameters.put("subject_token", SUBJECT_TOKEN);
             requestParameters.put("subject_token_type", TOKEN_TYPE_ACCESS);
             tokenRequest.setRequestParameters(requestParameters);
-
-            assertThatThrownBy(() -> granter.getTokenActor(tokenRequest))
-                    .isInstanceOf(InvalidGrantException.class);
         }
 
         @Test
-        void getTokenActor_whenSubjectTokenPayloadIsTamperedAfterSigning_throwsInvalidGrant()
-                throws Exception {
-            // Start with a legitimately signed JWT from this UAA instance.
-            TokenTestSupport support = new TokenTestSupport(null, null);
-            try {
-                String legitimateJwt = support.getIdTokenAsString(Collections.singletonList(OPENID));
+        void getTokenActor_whenIssuerCannotBeResolved_throwsInvalidGrant() {
+            doThrow(new InsufficientAuthenticationException("Unable to map issuer to a registered provider"))
+                    .when(externalOAuthAuthenticationManager).verifySubjectToken(SUBJECT_TOKEN);
 
-                // Replace the payload with attacker-controlled claims while keeping the
-                // original header and signature.  The signature now covers different bytes
-                // than the new payload, so validateToken() must reject it.
-                String[] parts = legitimateJwt.split("\\.");
-                String originalHeader    = parts[0];
-                String originalSignature = parts[2];
+            assertThatThrownBy(() -> granter.getTokenActor(tokenRequest))
+                    .isInstanceOf(InvalidGrantException.class)
+                    .hasMessage("Invalid subject_token");
+        }
 
-                Base64.Encoder enc = Base64.getUrlEncoder().withoutPadding();
-                String tamperedPayload = enc.encodeToString(
-                        ("{\"sub\":\"tampered-admin-user\"" +
-                         ",\"iss\":\"https://not-a-registered-idp.example.com\"" +
-                         ",\"user_name\":\"tampered-admin\"" +
-                         ",\"user_id\":\"tampered-user-id\"" +
-                         ",\"origin\":\"uaa\"}").getBytes(StandardCharsets.UTF_8));
+        @Test
+        void getTokenActor_whenSignatureOrExpiryCheckFails_throwsInvalidGrant() {
+            // validateToken() reports signature/expiry/audience failures as InvalidTokenException,
+            // which is NOT a Spring AuthenticationException — this exercises the second catch branch.
+            doThrow(new InvalidTokenException("Could not verify token signature."))
+                    .when(externalOAuthAuthenticationManager).verifySubjectToken(SUBJECT_TOKEN);
 
-                String tamperedJwt = originalHeader + "." + tamperedPayload + "." + originalSignature;
-
-                when(externalOAuthAuthenticationManager.verifySubjectToken(tamperedJwt))
-                        .thenThrow(new InsufficientAuthenticationException("Signature verification failed"));
-
-                requestParameters.put("subject_token", tamperedJwt);
-                requestParameters.put("subject_token_type", TOKEN_TYPE_ACCESS);
-                tokenRequest.setRequestParameters(requestParameters);
-
-                assertThatThrownBy(() -> granter.getTokenActor(tokenRequest))
-                        .isInstanceOf(InvalidGrantException.class);
-            } finally {
-                support.clear();
-            }
+            assertThatThrownBy(() -> granter.getTokenActor(tokenRequest))
+                    .isInstanceOf(InvalidGrantException.class)
+                    .hasMessage("Invalid subject_token");
         }
     }
 }
