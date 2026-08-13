@@ -107,8 +107,11 @@ public class TokenPolicy {
     public void setKeyInformation(Map<String, KeyInformation> keys) {
         if (keys != null) {
             keys.forEach((key, value) -> {
-                if (!StringUtils.hasText(value.getSigningKey()) || !StringUtils.hasText(key)) {
-                    throw new IllegalArgumentException("KeyId and Signing key should not be null or empty");
+                boolean hasSigningKey = StringUtils.hasText(value.getSigningKey());
+                boolean hasSigningKeyRef = StringUtils.hasText(value.getSigningKeyRef());
+                if (!StringUtils.hasText(key) || (!hasSigningKey && !hasSigningKeyRef)) {
+                    throw new IllegalArgumentException(
+                            "KeyId and (Signing key or Signing key reference) should not be null or empty");
                 }
             });
         }

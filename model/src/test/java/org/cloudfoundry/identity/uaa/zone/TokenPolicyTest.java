@@ -146,4 +146,26 @@ class TokenPolicyTest {
         assertThat(keyInformation.getSigningKeyRef()).isEqualTo("some-key-ref");
         assertThat(keyInformation.getSigningKey()).isNull();
     }
+
+    @Test
+    void setKeyInformation_acceptsASigningKeyRefOnlyEntry() {
+        TokenPolicy.KeyInformation keyInformation = new TokenPolicy.KeyInformation();
+        keyInformation.setSigningKeyRef("some-key-ref");
+
+        TokenPolicy tokenPolicy = new TokenPolicy();
+        tokenPolicy.setKeyInformation(Collections.singletonMap("key-id", keyInformation));
+
+        assertThat(tokenPolicy.getKeys().get("key-id").getSigningKeyRef()).isEqualTo("some-key-ref");
+        assertThat(tokenPolicy.getKeys().get("key-id").getSigningKey()).isNull();
+    }
+
+    @Test
+    void setKeyInformation_rejectsAnEntryWithNeitherSigningKeyNorSigningKeyRef() {
+        TokenPolicy.KeyInformation keyInformation = new TokenPolicy.KeyInformation();
+
+        TokenPolicy tokenPolicy = new TokenPolicy();
+        assertThatThrownBy(() ->
+                tokenPolicy.setKeyInformation(Collections.singletonMap("key-id", keyInformation)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 }
