@@ -119,6 +119,10 @@ dependencies {
     testImplementation(libs.awaitility)
 
     testImplementation(libs.grpcTesting)
+    // grpc-testing only depends on grpc-inprocess at Maven "runtime" scope, so
+    // io.grpc.inprocess.* (InProcessServerBuilder/InProcessChannelBuilder) is
+    // not on the test compile classpath without this explicit dependency.
+    testImplementation(libs.grpcInprocess)
 
     testRuntimeOnly(libs.jacocoAgent)
     testRuntimeOnly(libs.junit5PlatformLauncher)

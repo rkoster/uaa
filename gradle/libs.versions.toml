@@ -97,6 +97,10 @@ grpcNetty = { module = "io.grpc:grpc-netty", version.ref = "grpc" }
 grpcProtobuf = { module = "io.grpc:grpc-protobuf", version.ref = "grpc" }
 grpcStub = { module = "io.grpc:grpc-stub", version.ref = "grpc" }
 grpcTesting = { module = "io.grpc:grpc-testing", version.ref = "grpc" }
+# grpc-testing only pulls this in with Maven "runtime" scope, so it doesn't
+# land on the compile classpath; declare it explicitly for in-process test
+# fixtures (io.grpc.inprocess.*).
+grpcInprocess = { module = "io.grpc:grpc-inprocess", version.ref = "grpc" }
 
 # Hibernate
 hibernateValidator = { module = "org.hibernate.validator:hibernate-validator" }
