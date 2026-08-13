@@ -14,6 +14,8 @@
  */
 package org.cloudfoundry.identity.uaa.oauth;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import org.cloudfoundry.identity.uaa.impl.config.LegacyTokenKey;
 import org.cloudfoundry.identity.uaa.util.UaaStringUtils;
 import org.cloudfoundry.identity.uaa.util.UaaTokenUtils;
@@ -24,9 +26,7 @@ import org.cloudfoundry.identity.uaa.zone.TokenPolicy;
 import org.springframework.util.StringUtils;
 
 import java.net.URISyntaxException;
-import java.util.Collections;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -36,13 +36,9 @@ import static org.cloudfoundry.identity.uaa.util.UaaUrlUtils.addSubdomainToUrl;
 public class KeyInfoService {
     private final String uaaBaseURL;
     private final List<SigningKeyProvider> providers;
-    private final Map<CacheKey, KeyInfo> cache = Collections.synchronizedMap(
-            new LinkedHashMap<>(16, 0.75f, true) {
-                @Override
-                protected boolean removeEldestEntry(Map.Entry<CacheKey, KeyInfo> eldest) {
-                    return size() > 128;
-                }
-            });
+    private final Cache<CacheKey, KeyInfo> cache = Caffeine.newBuilder()
+            .maximumSize(128)
+            .build();
 
     public KeyInfoService(String uaaBaseURL) {
         this(uaaBaseURL, List.of(new LocalPemSigningKeyProvider()));
@@ -94,7 +90,7 @@ public class KeyInfoService {
                     keyInformation.getSigningCert(),
                     keyUrl);
 
-            keys.put(entry.getKey(), cache.computeIfAbsent(cacheKey,
+            keys.put(entry.getKey(), cache.get(cacheKey,
                     unused -> resolve(entry.getKey(), keyInformation, sigAlg, keyUrl)));
         }
 
