@@ -213,6 +213,7 @@ public class TokenPolicy {
         private String signingKey;
         private String signingCert;
         private String signingAlg;
+        private String signingKeyRef;
 
         public String getSigningCert() {
             return this.signingCert;
@@ -236,6 +237,14 @@ public class TokenPolicy {
 
         public void setSigningKey(String signingKey) {
             this.signingKey = signingKey;
+        }
+
+        public String getSigningKeyRef() {
+            return signingKeyRef;
+        }
+
+        public void setSigningKeyRef(String signingKeyRef) {
+            this.signingKeyRef = signingKeyRef;
         }
     }
 

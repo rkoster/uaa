@@ -137,4 +137,13 @@ class TokenPolicyTest {
         assertThat(tokenPolicy.getKeys().get("key-id-1").getSigningCert()).isEqualTo("some-cert");
         assertThat(tokenPolicy.getKeys().get("key-id-1").getSigningAlg()).isEqualTo("RS256");
     }
+
+    @Test
+    void keyInformationCarriesASigningKeyRef() {
+        TokenPolicy.KeyInformation keyInformation = new TokenPolicy.KeyInformation();
+        keyInformation.setSigningKeyRef("some-key-ref");
+
+        assertThat(keyInformation.getSigningKeyRef()).isEqualTo("some-key-ref");
+        assertThat(keyInformation.getSigningKey()).isNull();
+    }
 }
