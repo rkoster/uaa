@@ -107,6 +107,18 @@ public class KeyInfoService {
 
     private KeyInfo resolve(String keyId, TokenPolicy.KeyInformation keyInformation,
                             String sigAlg, String keyUrl) {
+        boolean hasInline = !UaaStringUtils.isEmpty(keyInformation.getSigningKey());
+        boolean hasReference = !UaaStringUtils.isEmpty(keyInformation.getSigningKeyRef());
+
+        if (hasInline && hasReference) {
+            throw new IllegalArgumentException(
+                    "Key " + keyId + " sets both signingKey and signingKeyRef; set one, not both");
+        }
+        if (!hasInline && !hasReference) {
+            throw new IllegalArgumentException(
+                    "Key " + keyId + " sets neither signingKey nor signingKeyRef");
+        }
+
         for (SigningKeyProvider provider : providers) {
             if (provider.supports(keyInformation)) {
                 return new KeyInfo(keyId, keyUrl, provider.resolve(keyInformation, sigAlg));

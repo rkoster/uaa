@@ -19,6 +19,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.text.ParseException;
 import java.time.Duration;
@@ -28,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -190,6 +192,34 @@ class KeyInfoServiceTests {
         }
     }
 
+    @Test
+    void rejectsAKeyThatIsBothInlineAndReferenced() {
+        TokenPolicy.KeyInformation keyInformation = new TokenPolicy.KeyInformation();
+        keyInformation.setSigningKey(SIGNING_KEY);
+        keyInformation.setSigningKeyRef("also-a-ref");
+        configureDefaultZoneKeyInformation(Map.of("ambiguous", keyInformation), "ambiguous");
+
+        assertThatThrownBy(() -> keyInfoService.getKeys())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("ambiguous")
+                .hasMessageContaining("not both");
+    }
+
+    @Test
+    void rejectsAKeyThatIsNeitherInlineNorReferenced() {
+        // TokenPolicy.setKeyInformation() already rejects an entry that is neither inline nor
+        // referenced, so the "empty" KeyInformation used here is injected via reflection to reach
+        // KeyInfoService's own resolution-time guard directly.
+        TokenPolicy tokenPolicy = new TokenPolicy();
+        ReflectionTestUtils.setField(tokenPolicy, "keys", Map.of("empty", new TokenPolicy.KeyInformation()));
+        tokenPolicy.setActiveKeyId("empty");
+        configureDefaultZoneTokenPolicy(tokenPolicy);
+
+        assertThatThrownBy(() -> keyInfoService.getKeys())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("empty");
+    }
+
     private void configureDefaultZoneKeys(Map<String, String> keys) {
         IdentityZoneHolder.clear();
         IdentityZoneProvisioning provisioning = mock(IdentityZoneProvisioning.class);
@@ -212,6 +242,17 @@ class KeyInfoServiceTests {
         TokenPolicy tokenPolicy = new TokenPolicy();
         tokenPolicy.setKeyInformation(keys);
         tokenPolicy.setActiveKeyId(activeKeyId);
+        config.setTokenPolicy(tokenPolicy);
+        zone.setConfig(config);
+        when(provisioning.retrieve("uaa")).thenReturn(zone);
+    }
+
+    private void configureDefaultZoneTokenPolicy(TokenPolicy tokenPolicy) {
+        IdentityZoneHolder.clear();
+        IdentityZoneProvisioning provisioning = mock(IdentityZoneProvisioning.class);
+        IdentityZoneHolder.setProvisioning(provisioning);
+        IdentityZone zone = IdentityZone.getUaa();
+        IdentityZoneConfiguration config = new IdentityZoneConfiguration();
         config.setTokenPolicy(tokenPolicy);
         zone.setConfig(config);
         when(provisioning.retrieve("uaa")).thenReturn(zone);
