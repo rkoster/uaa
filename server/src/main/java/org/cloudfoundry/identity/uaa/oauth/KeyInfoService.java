@@ -15,6 +15,7 @@
 package org.cloudfoundry.identity.uaa.oauth;
 
 import org.cloudfoundry.identity.uaa.impl.config.LegacyTokenKey;
+import org.cloudfoundry.identity.uaa.util.UaaStringUtils;
 import org.cloudfoundry.identity.uaa.util.UaaTokenUtils;
 import org.cloudfoundry.identity.uaa.zone.IdentityZone;
 import org.cloudfoundry.identity.uaa.zone.IdentityZoneConfiguration;
@@ -23,7 +24,10 @@ import org.cloudfoundry.identity.uaa.zone.TokenPolicy;
 import org.springframework.util.StringUtils;
 
 import java.net.URISyntaxException;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -31,9 +35,32 @@ import static org.cloudfoundry.identity.uaa.util.UaaUrlUtils.addSubdomainToUrl;
 
 public class KeyInfoService {
     private final String uaaBaseURL;
+    private final List<SigningKeyProvider> providers;
+    private final Map<CacheKey, KeyInfo> cache = Collections.synchronizedMap(
+            new LinkedHashMap<>(16, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<CacheKey, KeyInfo> eldest) {
+                    return size() > 128;
+                }
+            });
 
     public KeyInfoService(String uaaBaseURL) {
+        this(uaaBaseURL, List.of(new LocalPemSigningKeyProvider()));
+    }
+
+    public KeyInfoService(String uaaBaseURL, List<SigningKeyProvider> providers) {
         this.uaaBaseURL = uaaBaseURL;
+        this.providers = providers;
+    }
+
+    /**
+     * Identifies a resolved key by its content rather than by name, so a
+     * configuration change produces a different entry and stale entries simply
+     * age out. The zone-specific URL is included because it is baked into the
+     * key's published location.
+     */
+    private record CacheKey(String keyId, String signingKey, String signingKeyRef,
+                            String signingAlg, String signingCert, String keyUrl) {
     }
 
     public KeyInfo getKey(String keyId, String sigAlg) {
@@ -55,11 +82,20 @@ public class KeyInfoService {
         }
 
         Map<String, KeyInfo> keys = new HashMap<>();
+        String keyUrl = addSubdomainToUrl(uaaBaseURL, IdentityZoneHolder.get().getSubdomain());
+
         for (Map.Entry<String, TokenPolicy.KeyInformation> entry : config.getTokenPolicy().getKeys().entrySet()) {
-            KeyInfo keyInfo = KeyInfoBuilder.build(entry.getKey(), entry.getValue().getSigningKey(), addSubdomainToUrl(uaaBaseURL, IdentityZoneHolder.get().getSubdomain()),
-                    sigAlg != null ? sigAlg : entry.getValue().getSigningAlg(),
-                    entry.getValue().getSigningCert());
-            keys.put(entry.getKey(), keyInfo);
+            TokenPolicy.KeyInformation keyInformation = entry.getValue();
+            CacheKey cacheKey = new CacheKey(
+                    entry.getKey(),
+                    keyInformation.getSigningKey(),
+                    keyInformation.getSigningKeyRef(),
+                    sigAlg != null ? sigAlg : keyInformation.getSigningAlg(),
+                    keyInformation.getSigningCert(),
+                    keyUrl);
+
+            keys.put(entry.getKey(), cache.computeIfAbsent(cacheKey,
+                    unused -> resolve(entry.getKey(), keyInformation, sigAlg, keyUrl)));
         }
 
         if (keys.isEmpty()) {
@@ -67,6 +103,26 @@ public class KeyInfoService {
         }
 
         return keys;
+    }
+
+    private KeyInfo resolve(String keyId, TokenPolicy.KeyInformation keyInformation,
+                            String sigAlg, String keyUrl) {
+        for (SigningKeyProvider provider : providers) {
+            if (provider.supports(keyInformation)) {
+                return new KeyInfo(keyId, keyUrl, provider.resolve(keyInformation, sigAlg));
+            }
+        }
+        // Symmetric (HMAC) keys have no SigningKeyProvider today -- SigningKeyMaterial has no
+        // representation for a shared secret, only a PublicKey. Preserve the historical behaviour
+        // for this case by falling back to the original construction path.
+        if (!UaaStringUtils.isEmpty(keyInformation.getSigningKey())) {
+            return KeyInfoBuilder.build(keyId, keyInformation.getSigningKey(), keyUrl,
+                    sigAlg != null ? sigAlg : keyInformation.getSigningAlg(),
+                    keyInformation.getSigningCert());
+        }
+        throw new IllegalArgumentException(
+                "No signing key provider can handle key " + keyId
+                        + "; set exactly one of signingKey or signingKeyRef");
     }
 
     public KeyInfo getActiveKey() {

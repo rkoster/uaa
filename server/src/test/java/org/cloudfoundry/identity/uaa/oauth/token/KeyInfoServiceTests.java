@@ -4,8 +4,11 @@ import com.nimbusds.jose.jwk.JWK;
 import com.nimbusds.jose.jwk.JWKSet;
 import org.cloudfoundry.identity.uaa.extensions.PollutionPreventionExtension;
 import org.cloudfoundry.identity.uaa.impl.config.LegacyTokenKey;
+import org.cloudfoundry.identity.uaa.oauth.FakeSigningService;
 import org.cloudfoundry.identity.uaa.oauth.KeyInfo;
 import org.cloudfoundry.identity.uaa.oauth.KeyInfoService;
+import org.cloudfoundry.identity.uaa.oauth.LocalPemSigningKeyProvider;
+import org.cloudfoundry.identity.uaa.oauth.RemoteSigningKeyProvider;
 import org.cloudfoundry.identity.uaa.oauth.common.util.RandomValueStringGenerator;
 import org.cloudfoundry.identity.uaa.zone.IdentityZone;
 import org.cloudfoundry.identity.uaa.zone.IdentityZoneConfiguration;
@@ -18,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 
 import java.text.ParseException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -165,6 +169,27 @@ class KeyInfoServiceTests {
         assertThat(keyInfoService.getTokenEndpointUrl()).isEqualTo("https://issuer.set/uaa/oauth/token");
     }
 
+    @Test
+    void resolvesARemoteKeyOnlyOnceAcrossRepeatedLookups() throws Exception {
+        try (FakeSigningService service = new FakeSigningService()) {
+            RemoteSigningKeyProvider remote =
+                    new RemoteSigningKeyProvider(service.channel(), Duration.ofSeconds(2), 3);
+            KeyInfoService remoteKeyInfoService = new KeyInfoService(
+                    "https://localhost",
+                    List.of(new LocalPemSigningKeyProvider(), remote));
+
+            TokenPolicy.KeyInformation keyInformation = new TokenPolicy.KeyInformation();
+            keyInformation.setSigningKeyRef(FakeSigningService.KEY_REF);
+            configureDefaultZoneKeyInformation(Map.of("remote-kid", keyInformation), "remote-kid");
+
+            remoteKeyInfoService.getKeys();
+            remoteKeyInfoService.getKeys();
+            remoteKeyInfoService.getActiveKey();
+
+            assertThat(service.publicKeyCallCount()).isEqualTo(1);
+        }
+    }
+
     private void configureDefaultZoneKeys(Map<String, String> keys) {
         IdentityZoneHolder.clear();
         IdentityZoneProvisioning provisioning = mock(IdentityZoneProvisioning.class);
@@ -173,6 +198,20 @@ class KeyInfoServiceTests {
         IdentityZoneConfiguration config = new IdentityZoneConfiguration();
         TokenPolicy tokenPolicy = new TokenPolicy();
         tokenPolicy.setKeys(keys);
+        config.setTokenPolicy(tokenPolicy);
+        zone.setConfig(config);
+        when(provisioning.retrieve("uaa")).thenReturn(zone);
+    }
+
+    private void configureDefaultZoneKeyInformation(Map<String, TokenPolicy.KeyInformation> keys, String activeKeyId) {
+        IdentityZoneHolder.clear();
+        IdentityZoneProvisioning provisioning = mock(IdentityZoneProvisioning.class);
+        IdentityZoneHolder.setProvisioning(provisioning);
+        IdentityZone zone = IdentityZone.getUaa();
+        IdentityZoneConfiguration config = new IdentityZoneConfiguration();
+        TokenPolicy tokenPolicy = new TokenPolicy();
+        tokenPolicy.setKeyInformation(keys);
+        tokenPolicy.setActiveKeyId(activeKeyId);
         config.setTokenPolicy(tokenPolicy);
         zone.setConfig(config);
         when(provisioning.retrieve("uaa")).thenReturn(zone);
