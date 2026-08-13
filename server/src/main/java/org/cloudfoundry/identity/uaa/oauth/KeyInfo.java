@@ -7,9 +7,12 @@ import com.nimbusds.jose.JWSSigner;
 import com.nimbusds.jose.crypto.ECDSASigner;
 import com.nimbusds.jose.crypto.RSASSASigner;
 import com.nimbusds.jose.crypto.bc.BouncyCastleFIPSProviderSingleton;
+import com.nimbusds.jose.jwk.Curve;
+import com.nimbusds.jose.jwk.ECKey;
 import com.nimbusds.jose.jwk.JWK;
 import com.nimbusds.jose.jwk.JWKParameterNames;
 import com.nimbusds.jose.jwk.OctetSequenceKey;
+import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jose.util.Base64;
 import com.nimbusds.jose.util.Base64URL;
 import com.nimbusds.jose.util.X509CertUtils;
@@ -23,10 +26,12 @@ import org.springframework.web.util.UriComponentsBuilder;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 import java.security.KeyPair;
+import java.security.PublicKey;
 import java.security.cert.CertificateExpiredException;
 import java.security.cert.CertificateNotYetValidException;
 import java.security.cert.X509Certificate;
 import java.security.interfaces.ECPrivateKey;
+import java.security.interfaces.ECPublicKey;
 import java.security.interfaces.RSAPublicKey;
 import java.util.Collections;
 import java.util.HashMap;
@@ -38,16 +43,16 @@ import static org.cloudfoundry.identity.uaa.oauth.jwk.JsonWebKey.KeyType.MAC;
 import static org.cloudfoundry.identity.uaa.oauth.jwk.JsonWebKey.KeyType.RSA;
 
 public class KeyInfo {
-    private final boolean isAsymmetric;
-    private final JWSSigner signer;
-    private final SignatureVerifier verifier;
+    private boolean isAsymmetric;
+    private JWSSigner signer;
+    private SignatureVerifier verifier;
     private final String keyId;
     private final String keyUrl;
-    private final String verifierKey;
-    private final Optional<X509Certificate> verifierCertificate;
-    private final JsonWebKey.KeyType type;
-    private final JWK jwk;
-    private final String algorithm;
+    private String verifierKey;
+    private Optional<X509Certificate> verifierCertificate;
+    private JsonWebKey.KeyType type;
+    private JWK jwk;
+    private String algorithm;
 
     public KeyInfo(String keyId, String signingKey, String keyUrl) {
         this(keyId, signingKey, keyUrl, null, null);
@@ -94,6 +99,39 @@ public class KeyInfo {
             this.verifierCertificate = Optional.empty();
             this.type = MAC;
         }
+    }
+
+    /**
+     * Builds key information from material resolved by a
+     * {@link SigningKeyProvider}. Used when the private key is held outside
+     * this process and only the public half is available here.
+     */
+    public KeyInfo(String keyId, String keyUrl, SigningKeyMaterial material) {
+        this.keyId = keyId;
+        this.keyUrl = validateAndConstructTokenKeyUrl(keyUrl);
+        this.isAsymmetric = true;
+        this.algorithm = material.algorithm();
+        this.signer = material.signer();
+        this.verifierCertificate = material.certificate();
+
+        PublicKey publicKey = material.publicKey();
+        if (publicKey instanceof RSAPublicKey rsaPublicKey) {
+            this.jwk = new RSAKey.Builder(rsaPublicKey).build();
+            this.type = RSA;
+        } else if (publicKey instanceof ECPublicKey ecPublicKey) {
+            Curve curve = Curve.forECParameterSpec(ecPublicKey.getParams());
+            if (curve == null) {
+                throw new IllegalArgumentException("Unsupported EC curve for key " + keyId);
+            }
+            this.jwk = new ECKey.Builder(curve, ecPublicKey).build();
+            this.type = EC;
+        } else {
+            throw new IllegalArgumentException(
+                    "Unsupported public key type for key " + keyId + ": " + publicKey.getAlgorithm());
+        }
+
+        this.verifier = new SignatureVerifier(keyId, this.algorithm, this.jwk);
+        this.verifierKey = JsonWebKey.pemEncodePublicKey(publicKey).orElse(null);
     }
 
     public SignatureVerifier getVerifier() {

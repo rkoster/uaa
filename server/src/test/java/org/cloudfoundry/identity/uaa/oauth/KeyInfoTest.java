@@ -74,4 +74,26 @@ class KeyInfoTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Invalid Key URL");
     }
+
+    @Test
+    void buildsFromResolvedMaterialWithoutAPrivateKey() throws Exception {
+        java.security.KeyPairGenerator generator = java.security.KeyPairGenerator.getInstance("RSA");
+        generator.initialize(2048);
+        java.security.KeyPair pair = generator.generateKeyPair();
+        com.nimbusds.jose.JWSSigner signer =
+                new com.nimbusds.jose.crypto.RSASSASigner(pair.getPrivate());
+
+        SigningKeyMaterial material = new SigningKeyMaterial(
+                signer, pair.getPublic(), "RS256", java.util.Optional.empty());
+
+        KeyInfo keyInfo = new KeyInfo("remote-key", "https://localhost", material);
+
+        assertThat(keyInfo.keyId()).isEqualTo("remote-key");
+        assertThat(keyInfo.algorithm()).isEqualTo("RS256");
+        assertThat(keyInfo.type()).isEqualTo("RSA");
+        assertThat(keyInfo.verifierKey()).startsWith("-----BEGIN PUBLIC KEY-----");
+        assertThat(keyInfo.getJwkMap()).containsEntry("kid", "remote-key");
+        assertThat(keyInfo.getJwkMap()).containsKey("n");
+        assertThat(keyInfo.getSigner()).isSameAs(signer);
+    }
 }
