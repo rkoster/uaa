@@ -3,6 +3,7 @@ plugins {
     alias(libs.plugins.springDependencyManagement)
     alias(libs.plugins.jacocoLog)
     alias(libs.plugins.sonarqube)
+    alias(libs.plugins.protobuf)
 }
 
 description = "CloudFoundry Identity Server JAR"
@@ -87,6 +88,15 @@ dependencies {
     implementation(libs.apacheHttpClient)
     implementation(libs.commonsIo)
 
+    implementation(libs.grpcNetty)
+    implementation(libs.grpcProtobuf)
+    implementation(libs.grpcStub)
+    implementation(libs.protobufJava)
+    // Required at compile time only: grpc-java's generated stubs reference
+    // javax.annotation.Generated unconditionally, and the JDK removed that
+    // class in 9+.
+    compileOnly(libs.javaxAnnotationApi)
+
     testImplementation(project(mapOf("path" to ":cloudfoundry-identity-model", "configuration" to "testArtifacts")))
 
     testImplementation(libs.springBootStarterTest) {
@@ -107,6 +117,8 @@ dependencies {
 
     testImplementation(libs.xmlUnit)
     testImplementation(libs.awaitility)
+
+    testImplementation(libs.grpcTesting)
 
     testRuntimeOnly(libs.jacocoAgent)
     testRuntimeOnly(libs.junit5PlatformLauncher)
@@ -176,4 +188,14 @@ val tomcatListenerJar = tasks.register<Jar>("tomcatListenerJar") {
 
 artifacts {
     add("archives", tomcatListenerJar)
+}
+
+protobuf {
+    protoc { artifact = "com.google.protobuf:protoc:${libs.versions.protobuf.get()}" }
+    plugins {
+        create("grpc") { artifact = "io.grpc:protoc-gen-grpc-java:${libs.versions.grpc.get()}" }
+    }
+    generateProtoTasks {
+        all().forEach { it.plugins { create("grpc") } }
+    }
 }
