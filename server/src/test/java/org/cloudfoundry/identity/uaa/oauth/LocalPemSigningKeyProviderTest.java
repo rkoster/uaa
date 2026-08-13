@@ -43,6 +43,14 @@ class LocalPemSigningKeyProviderTest {
     }
 
     @Test
+    void doesNotSupportASymmetricKey() {
+        TokenPolicy.KeyInformation key = new TokenPolicy.KeyInformation();
+        key.setSigningKey("testkey");
+
+        assertThat(provider.supports(key)).isFalse();
+    }
+
+    @Test
     void resolvesInlineMaterialToASigner() {
         TokenPolicy.KeyInformation key = new TokenPolicy.KeyInformation();
         key.setSigningKey(RSA_PRIVATE_KEY);
