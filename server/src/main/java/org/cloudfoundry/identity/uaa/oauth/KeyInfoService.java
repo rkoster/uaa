@@ -23,6 +23,8 @@ import org.cloudfoundry.identity.uaa.zone.IdentityZone;
 import org.cloudfoundry.identity.uaa.zone.IdentityZoneConfiguration;
 import org.cloudfoundry.identity.uaa.zone.IdentityZoneHolder;
 import org.cloudfoundry.identity.uaa.zone.TokenPolicy;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.util.StringUtils;
 
 import java.net.URISyntaxException;
@@ -33,9 +35,12 @@ import java.util.Optional;
 
 import static org.cloudfoundry.identity.uaa.util.UaaUrlUtils.addSubdomainToUrl;
 
-public class KeyInfoService {
+public class KeyInfoService implements AutoCloseable {
+    private static final Logger LOGGER = LoggerFactory.getLogger(KeyInfoService.class);
+
     private final String uaaBaseURL;
     private final List<SigningKeyProvider> providers;
+    private final List<AutoCloseable> closeables;
     private final Cache<CacheKey, KeyInfo> cache = Caffeine.newBuilder()
             .maximumSize(128)
             .build();
@@ -45,8 +50,35 @@ public class KeyInfoService {
     }
 
     public KeyInfoService(String uaaBaseURL, List<SigningKeyProvider> providers) {
+        this(uaaBaseURL, providers, List.of());
+    }
+
+    /**
+     * @param closeables resources (e.g. a {@link RemoteSigningChannel}) that this service owns and
+     *                    should shut down when it is itself closed, typically wired via
+     *                    {@code @Bean(destroyMethod = "close")} so a Spring application context
+     *                    close triggers it automatically.
+     */
+    public KeyInfoService(String uaaBaseURL, List<SigningKeyProvider> providers, List<AutoCloseable> closeables) {
         this.uaaBaseURL = uaaBaseURL;
         this.providers = providers;
+        this.closeables = List.copyOf(closeables);
+    }
+
+    /**
+     * Shuts down every resource passed in at construction time (e.g. a remote signer's gRPC
+     * channel and its event loop group). A failure closing one resource does not prevent the
+     * others from being closed.
+     */
+    @Override
+    public void close() {
+        for (AutoCloseable closeable : closeables) {
+            try {
+                closeable.close();
+            } catch (Exception e) {
+                LOGGER.warn("Failed to close {}", closeable, e);
+            }
+        }
     }
 
     /**

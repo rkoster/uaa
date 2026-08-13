@@ -34,6 +34,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -342,6 +343,40 @@ class KeyInfoServiceTests {
         assertThatThrownBy(() -> keyInfoService.getKeys())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("empty");
+    }
+
+    @Test
+    void closeClosesEveryRegisteredCloseable() throws Exception {
+        AtomicBoolean firstClosed = new AtomicBoolean(false);
+        AtomicBoolean secondClosed = new AtomicBoolean(false);
+
+        KeyInfoService service = new KeyInfoService(
+                "https://localhost/uaa",
+                List.of(new LocalPemSigningKeyProvider()),
+                List.of(() -> firstClosed.set(true), () -> secondClosed.set(true)));
+
+        service.close();
+
+        assertThat(firstClosed).isTrue();
+        assertThat(secondClosed).isTrue();
+    }
+
+    @Test
+    void closeClosesRemainingCloseablesEvenIfOneThrows() throws Exception {
+        AtomicBoolean secondClosed = new AtomicBoolean(false);
+
+        KeyInfoService service = new KeyInfoService(
+                "https://localhost/uaa",
+                List.of(new LocalPemSigningKeyProvider()),
+                List.of(
+                        () -> {
+                            throw new IllegalStateException("boom");
+                        },
+                        () -> secondClosed.set(true)));
+
+        service.close();
+
+        assertThat(secondClosed).isTrue();
     }
 
     private void configureDefaultZoneKeys(Map<String, String> keys) {
