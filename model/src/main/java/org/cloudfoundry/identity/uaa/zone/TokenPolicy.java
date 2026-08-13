@@ -35,6 +35,7 @@ public class TokenPolicy {
         keyInformation.setSigningKey(e.getValue().getSigningKey());
         keyInformation.setSigningCert(e.getValue().getSigningCert());
         keyInformation.setSigningAlg(e.getValue().getSigningAlg());
+        keyInformation.setSigningKeyRef(e.getValue().getSigningKeyRef());
         return keyInformation;
     });
     private static final Collector<? super Map.Entry<String, KeyInformation>, ?, ? extends Map<String, KeyInformation>> inputCollector

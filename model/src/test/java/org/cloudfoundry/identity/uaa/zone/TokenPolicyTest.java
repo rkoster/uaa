@@ -168,4 +168,19 @@ class TokenPolicyTest {
                 tokenPolicy.setKeyInformation(Collections.singletonMap("key-id", keyInformation)))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    void signingKeyRefSurvivesAJsonSerializationRoundTrip() {
+        TokenPolicy.KeyInformation keyInformation = new TokenPolicy.KeyInformation();
+        keyInformation.setSigningKeyRef("some-key-ref");
+
+        TokenPolicy tokenPolicy = new TokenPolicy();
+        tokenPolicy.setKeyInformation(Collections.singletonMap("key-id", keyInformation));
+
+        String json = JsonUtils.writeValueAsString(tokenPolicy);
+        TokenPolicy roundTripped = JsonUtils.readValue(json, TokenPolicy.class);
+
+        assertThat(roundTripped.getKeys().get("key-id").getSigningKeyRef()).isEqualTo("some-key-ref");
+        assertThat(roundTripped.getKeys().get("key-id").getSigningKey()).isNull();
+    }
 }
