@@ -4,7 +4,7 @@ import io.grpc.ManagedChannel;
 import io.grpc.netty.NettyChannelBuilder;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioDomainSocketChannel;
-import io.netty.channel.unix.DomainSocketAddress;
+import java.net.UnixDomainSocketAddress;
 import org.cloudfoundry.identity.uaa.oauth.KeyInfoService;
 import org.cloudfoundry.identity.uaa.oauth.LocalPemSigningKeyProvider;
 import org.cloudfoundry.identity.uaa.oauth.RemoteSigningChannel;
@@ -51,7 +51,7 @@ public class UaaConfig {
         if (StringUtils.hasText(remoteSignerSocket)) {
             NioEventLoopGroup eventLoopGroup = new NioEventLoopGroup();
             ManagedChannel channel = NettyChannelBuilder
-                    .forAddress(new DomainSocketAddress(remoteSignerSocket))
+                    .forAddress(UnixDomainSocketAddress.of(remoteSignerSocket))
                     .eventLoopGroup(eventLoopGroup)
                     .channelType(NioDomainSocketChannel.class)
                     .usePlaintext()
