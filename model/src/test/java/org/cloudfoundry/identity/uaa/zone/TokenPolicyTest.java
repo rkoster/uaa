@@ -170,6 +170,21 @@ class TokenPolicyTest {
     }
 
     @Test
+    void signingKeyRefSurvivesConstructionFromRawMap() {
+        // Regression: the 3-arg constructor (used by Spring at startup to load
+        // jwt.token.policy.keys from uaa.yml) was not forwarding signingKeyRef.
+        Map<String, String> rawKey = new java.util.HashMap<>();
+        rawKey.put("signingKeyRef", "my-kms-key");
+        rawKey.put("signingAlg", "RS256");
+
+        TokenPolicy policy = new TokenPolicy(43200, 2592000,
+                Collections.singletonMap("key-1", rawKey));
+
+        assertThat(policy.getKeys().get("key-1").getSigningKeyRef()).isEqualTo("my-kms-key");
+        assertThat(policy.getKeys().get("key-1").getSigningKey()).isNull();
+    }
+
+    @Test
     void signingKeyRefSurvivesAJsonSerializationRoundTrip() {
         TokenPolicy.KeyInformation keyInformation = new TokenPolicy.KeyInformation();
         keyInformation.setSigningKeyRef("some-key-ref");

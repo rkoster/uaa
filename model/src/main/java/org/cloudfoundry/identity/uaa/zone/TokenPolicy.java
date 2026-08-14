@@ -79,6 +79,7 @@ public class TokenPolicy {
             keyInformation.setSigningKey(e.getValue().get("signingKey"));
             keyInformation.setSigningCert(e.getValue().get("signingCert"));
             keyInformation.setSigningAlg(e.getValue().get("signingAlg"));
+            keyInformation.setSigningKeyRef(e.getValue().get("signingKeyRef"));
             return keyInformation;
         })));
     }
