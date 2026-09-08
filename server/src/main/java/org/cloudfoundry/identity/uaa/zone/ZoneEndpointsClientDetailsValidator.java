@@ -1,18 +1,22 @@
 package org.cloudfoundry.identity.uaa.zone;
 
-import org.apache.commons.lang3.StringUtils;
 import org.cloudfoundry.identity.uaa.client.ClientDetailsValidator;
 import org.cloudfoundry.identity.uaa.client.InvalidClientDetailsException;
+import org.cloudfoundry.identity.uaa.client.TlsClientAuthConfiguration;
 import org.cloudfoundry.identity.uaa.client.UaaClientDetails;
 import org.cloudfoundry.identity.uaa.constants.OriginKeys;
 import org.cloudfoundry.identity.uaa.oauth.client.ClientConstants;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.authority.AuthorityUtils;
 import org.cloudfoundry.identity.uaa.oauth.provider.ClientDetails;
 import org.springframework.stereotype.Component;
 
 import java.util.Collections;
+import java.util.Map;
 
+import static org.cloudfoundry.identity.uaa.client.ClientAdminEndpointsValidator.checkMtlsClientConfigAllowed;
 import static org.cloudfoundry.identity.uaa.client.ClientAdminEndpointsValidator.checkRequestedGrantTypes;
+import static org.cloudfoundry.identity.uaa.client.ClientAdminEndpointsValidator.validateTlsClientAuthClaimConfig;
 import static org.cloudfoundry.identity.uaa.oauth.token.TokenConstants.GRANT_TYPE_AUTHORIZATION_CODE;
 import static org.cloudfoundry.identity.uaa.oauth.token.TokenConstants.GRANT_TYPE_CLIENT_CREDENTIALS;
 import static org.cloudfoundry.identity.uaa.oauth.token.TokenConstants.GRANT_TYPE_JWT_BEARER;
@@ -27,26 +31,36 @@ public class ZoneEndpointsClientDetailsValidator implements ClientDetailsValidat
 
     private static final String REQUIRED_SCOPE = "zones.write";
     private final ClientSecretValidator clientSecretValidator;
+    private final boolean mtlsEnabled;
 
     public ZoneEndpointsClientDetailsValidator(
-            final ClientSecretValidator clientSecretValidator) {
+            final ClientSecretValidator clientSecretValidator,
+            @Value("${uaa.mtls-enabled:false}") final boolean mtlsEnabled) {
         this.clientSecretValidator = clientSecretValidator;
+        this.mtlsEnabled = mtlsEnabled;
     }
 
     @Override
     public ClientDetails validate(ClientDetails clientDetails, Mode mode) throws InvalidClientDetailsException {
 
         if (mode == Mode.CREATE) {
+            Map<String, Object> additionalInformation = clientDetails.getAdditionalInformation();
+            if (additionalInformation == null) {
+                additionalInformation = Collections.emptyMap();
+            }
             if (!Collections.singleton("openid").equals(clientDetails.getScope())) {
                 throw new InvalidClientDetailsException("only openid scope is allowed");
             }
             if (!Collections.singleton("uaa.resource").equals(AuthorityUtils.authorityListToSet(clientDetails.getAuthorities()))) {
                 throw new InvalidClientDetailsException("only uaa.resource authority is allowed");
             }
-            if (StringUtils.isBlank(clientDetails.getClientId())) {
+            if (clientDetails.getClientId() == null || clientDetails.getClientId().isBlank()) {
                 throw new InvalidClientDetailsException("client_id cannot be blank");
             }
             checkRequestedGrantTypes(clientDetails.getAuthorizedGrantTypes());
+            checkMtlsClientConfigAllowed(additionalInformation, mtlsEnabled, clientDetails.getClientId());
+            validateTlsClientAuthClaimConfig(additionalInformation, clientDetails.getClientId());
+            boolean hasTlsClientAuthCa = hasNonblankTlsClientAuthCa(additionalInformation);
             if (clientDetails.getAuthorizedGrantTypes().contains(GRANT_TYPE_CLIENT_CREDENTIALS) ||
                     clientDetails.getAuthorizedGrantTypes().contains(GRANT_TYPE_AUTHORIZATION_CODE) ||
                     clientDetails.getAuthorizedGrantTypes().contains(GRANT_TYPE_USER_TOKEN) ||
@@ -55,12 +69,13 @@ public class ZoneEndpointsClientDetailsValidator implements ClientDetailsValidat
                     clientDetails.getAuthorizedGrantTypes().contains(GRANT_TYPE_JWT_BEARER) ||
                     clientDetails.getAuthorizedGrantTypes().contains(GRANT_TYPE_TOKEN_EXCHANGE) ||
                     clientDetails.getAuthorizedGrantTypes().contains(GRANT_TYPE_PASSWORD)) {
-                if (StringUtils.isBlank(clientDetails.getClientSecret())) {
+                if (!hasTlsClientAuthCa
+                        && (clientDetails.getClientSecret() == null || clientDetails.getClientSecret().isBlank())) {
                     throw new InvalidClientDetailsException("client_secret cannot be blank");
                 }
                 clientSecretValidator.validate(clientDetails.getClientSecret());
             }
-            if (!Collections.singletonList(OriginKeys.UAA).equals(clientDetails.getAdditionalInformation().get(ClientConstants.ALLOWED_PROVIDERS))) {
+            if (!Collections.singletonList(OriginKeys.UAA).equals(additionalInformation.get(ClientConstants.ALLOWED_PROVIDERS))) {
                 throw new InvalidClientDetailsException("only the internal IdP ('uaa') is allowed");
             }
 
@@ -78,6 +93,18 @@ public class ZoneEndpointsClientDetailsValidator implements ClientDetailsValidat
             return clientDetails;
         }
         throw new IllegalStateException("This validator must be called with a mode");
+    }
+
+    static boolean hasNonblankTlsClientAuthCa(Map<String, Object> additionalInformation) {
+        if (additionalInformation == null) {
+            return false;
+        }
+
+        Object rawConfig = additionalInformation.get(TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CA);
+        if (rawConfig instanceof String pem) {
+            return !pem.isBlank();
+        }
+        return false;
     }
 
     @Override

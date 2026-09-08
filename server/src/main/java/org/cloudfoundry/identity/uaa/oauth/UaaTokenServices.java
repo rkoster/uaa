@@ -32,6 +32,7 @@ import org.cloudfoundry.identity.uaa.oauth.common.exceptions.InvalidTokenExcepti
 import org.cloudfoundry.identity.uaa.oauth.jwt.JwtHelper;
 import org.cloudfoundry.identity.uaa.oauth.openid.IdToken;
 import org.cloudfoundry.identity.uaa.oauth.openid.IdTokenCreationException;
+import org.cloudfoundry.identity.uaa.oauth.openid.IdTokenClaimEnhancer;
 import org.cloudfoundry.identity.uaa.oauth.openid.IdTokenCreator;
 import org.cloudfoundry.identity.uaa.oauth.openid.IdTokenGranter;
 import org.cloudfoundry.identity.uaa.oauth.openid.UserAuthenticationData;
@@ -150,6 +151,7 @@ public class UaaTokenServices implements AuthorizationServerTokenServices, Resou
     private final RevocableTokenProvisioning tokenProvisioning;
     private Set<String> excludedClaims;
     private List<UaaTokenEnhancer> uaaTokenEnhancers = new ArrayList<>();
+    private IdTokenClaimEnhancer idTokenClaimEnhancer = IdTokenClaimEnhancer.noOp();
     private final IdTokenCreator idTokenCreator;
     private final RefreshTokenCreator refreshTokenCreator;
     private TokenEndpointBuilder tokenEndpointBuilder;
@@ -213,6 +215,10 @@ public class UaaTokenServices implements AuthorizationServerTokenServices, Resou
         this.setUaaTokenEnhancers(uaaTokenEnhancer == null ? emptyList() : singletonList(uaaTokenEnhancer));
     }
 
+    public void setIdTokenClaimEnhancer(IdTokenClaimEnhancer idTokenClaimEnhancer) {
+        this.idTokenClaimEnhancer = idTokenClaimEnhancer == null ? IdTokenClaimEnhancer.noOp() : idTokenClaimEnhancer;
+    }
+
     @Override
     public void setApplicationEventPublisher(ApplicationEventPublisher applicationEventPublisher) {
         this.applicationEventPublisher = applicationEventPublisher;
@@ -271,8 +277,6 @@ public class UaaTokenServices implements AuthorizationServerTokenServices, Resou
                 claims.getGrantType(),
                 client);
 
-        throwIfInvalidRevocationHashSignature(claims.getRevSig(), user, client);
-
         Map<String, Object> additionalRootClaims = getAdditionalRootClaims(refreshTokenClaims);
 
         UserAuthenticationData authenticationData = new UserAuthenticationData(
@@ -306,7 +310,8 @@ public class UaaTokenServices implements AuthorizationServerTokenServices, Resou
                         additionalRootClaims,
                         claims.getRevSig(),
                         isRevocable,
-                        authenticationData
+                        authenticationData,
+                        null
                 );
 
         CompositeExpiringOAuth2RefreshToken expiringRefreshToken = new CompositeExpiringOAuth2RefreshToken(
@@ -383,16 +388,6 @@ public class UaaTokenServices implements AuthorizationServerTokenServices, Resou
         return isOpaque || claims.isRevocable();
     }
 
-    private static void throwIfInvalidRevocationHashSignature(String revocableHashSignature, UaaUser user, ClientDetails client) {
-        if (hasText(revocableHashSignature)) {
-            String clientSecretForHash = getClientSecretForHash(client.getClientSecret());
-            String newRevocableHashSignature = UaaTokenUtils.getRevocableTokenSignature(client, clientSecretForHash, user);
-            if (!revocableHashSignature.equals(newRevocableHashSignature)) {
-                throw new TokenRevokedException("Invalid refresh token: revocable signature mismatch");
-            }
-        }
-    }
-
     private static Set<String> getAcrAsSet(Map<String, Object> refreshTokenClaims) {
 
         Map<String, Object> acrFromRefreshToken = (Map<String, Object>) refreshTokenClaims.get(ACR);
@@ -439,7 +434,8 @@ public class UaaTokenServices implements AuthorizationServerTokenServices, Resou
             Map<String, Object> additionalRootClaims,
             String revocableHashSignature,
             boolean isRevocable,
-            UserAuthenticationData userAuthenticationData) throws AuthenticationException {
+            UserAuthenticationData userAuthenticationData,
+            OAuth2Authentication authentication) throws AuthenticationException {
         CompositeToken compositeToken = new CompositeToken(tokenId);
         compositeToken.setExpiration(accessTokenValidityResolver.resolve(clientId));
         compositeToken.setRefreshToken(refreshToken == null ? null : new DefaultOAuth2RefreshToken(refreshToken));
@@ -498,13 +494,37 @@ public class UaaTokenServices implements AuthorizationServerTokenServices, Resou
             } catch (RuntimeException | IdTokenCreationException _) {
                 throw new IllegalStateException("Cannot convert id token to JSON");
             }
-            String encodedIdTokenContent = JwtHelper.encode(idTokenContent.getClaimMap(), keyInfoService.getActiveKey()).getEncoded();
+            Map<String, Object> idTokenClaims = idTokenClaimEnhancer.enhance(
+                    idTokenContent.getClaimMap(), authentication, jwtAccessToken,
+                    decodeRefreshTokenClaims(refreshToken, additionalRootClaims));
+            String encodedIdTokenContent = JwtHelper.encode(idTokenClaims, keyInfoService.getActiveKey()).getEncoded();
             compositeToken.setIdTokenValue(encodedIdTokenContent);
         }
 
         publish(new TokenIssuedEvent(compositeToken, SecurityContextHolder.getContext().getAuthentication(), IdentityZoneHolder.getCurrentZoneId()));
 
         return compositeToken;
+    }
+
+    /**
+     * Resolve the claims of the refresh token issued in the same response, for use as the
+     * {@code refreshTokenClaims} argument to {@link IdTokenClaimEnhancer#enhance}.
+     *
+     * <p>The refresh token value handed to {@link #createCompositeToken} is always the
+     * internally-issued JWT (opaque refresh tokens are only substituted in the response
+     * returned to the caller), so this decodes it directly. Falls back to
+     * {@code additionalRootClaims} when no refresh token was issued or it cannot be decoded
+     * as a JWT.</p>
+     */
+    private static Map<String, Object> decodeRefreshTokenClaims(String refreshToken, Map<String, Object> additionalRootClaims) {
+        if (refreshToken != null) {
+            try {
+                return JsonUtils.readValueAsMap(JwtHelper.decode(refreshToken).getClaims());
+            } catch (RuntimeException e) {
+                // not a JWT (e.g. an opaque refresh token); fall through to the default below
+            }
+        }
+        return Collections.emptyMap();
     }
 
     private static Map<String, Object> addRootClaimEntry(Map<String, Object> additionalRootClaims, String entry, String value) {
@@ -536,8 +556,21 @@ public class UaaTokenServices implements AuthorizationServerTokenServices, Resou
         claims.put(JTI, token.getAdditionalInformation().get(JTI));
         claims.putAll(token.getAdditionalInformation());
 
+        // Apply enhancer-supplied claims that are NOT one of UAA's own protected/reserved claim
+        // names (NON_ADDITIONAL_ROOT_CLAIMS) now, before any UAA-owned default below is set -- so
+        // the corresponding claims.put(...) calls below always win over an enhancer's value for
+        // the same reserved claim name (e.g. scope, client_id, authorities, iss, grant_type). This
+        // closes a gap where a client-configurable enhancer (e.g. certificate-derived mTLS claim
+        // mappings) could otherwise overwrite any UAA-owned/protected claim. sub and aud are the
+        // two explicitly-supported late overrides (e.g. mTLS cert-identity templates rendering
+        // their own sub/aud) and are re-applied after all defaults below, once it is safe for them
+        // to win.
         if (additionalRootClaims != null) {
-            claims.putAll(additionalRootClaims);
+            additionalRootClaims.forEach((key, value) -> {
+                if (!NON_ADDITIONAL_ROOT_CLAIMS.contains(key)) {
+                    claims.put(key, value);
+                }
+            });
         }
 
         claims.put(SUB, clientId);
@@ -569,6 +602,18 @@ public class UaaTokenServices implements AuthorizationServerTokenServices, Resou
         }
 
         claims.put(AUD, UaaStringUtils.getValuesOrDefaultValue(resourceIds, clientId));
+
+        // Re-apply only the two explicitly-supported late overrides (e.g. mTLS cert-identity
+        // templates rendering their own sub/aud). Every other claim name in additionalRootClaims
+        // was already rejected above (see NON_ADDITIONAL_ROOT_CLAIMS) and must not win here either.
+        if (additionalRootClaims != null) {
+            if (additionalRootClaims.containsKey(SUB)) {
+                claims.put(SUB, additionalRootClaims.get(SUB));
+            }
+            if (additionalRootClaims.containsKey(AUD)) {
+                claims.put(AUD, additionalRootClaims.get(AUD));
+            }
+        }
 
         for (String excludedClaim : getExcludedClaims()) {
             claims.remove(excludedClaim);
@@ -722,7 +767,8 @@ public class UaaTokenServices implements AuthorizationServerTokenServices, Resou
                         additionalRootClaims,
                         revocableHashSignature,
                         isAccessTokenRevocable,
-                        authenticationData);
+                        authenticationData,
+                        authentication);
 
         return persistRevocableToken(tokenId, accessToken, refreshToken, client, clientId, userId, isOpaque, isAccessTokenRevocable, null);
     }

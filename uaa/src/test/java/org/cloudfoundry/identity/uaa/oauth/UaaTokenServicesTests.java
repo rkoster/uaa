@@ -19,6 +19,8 @@ import org.cloudfoundry.identity.uaa.authentication.UaaPrincipal;
 import org.cloudfoundry.identity.uaa.oauth.common.OAuth2AccessToken;
 import org.cloudfoundry.identity.uaa.oauth.jwt.Jwt;
 import org.cloudfoundry.identity.uaa.oauth.jwt.JwtHelper;
+import org.cloudfoundry.identity.uaa.oauth.openid.IdTokenClaimEnhancer;
+import org.cloudfoundry.identity.uaa.oauth.openid.IdTokenEnhancer;
 import org.cloudfoundry.identity.uaa.oauth.provider.AuthorizationRequest;
 import org.cloudfoundry.identity.uaa.oauth.provider.OAuth2Authentication;
 import org.cloudfoundry.identity.uaa.oauth.provider.OAuth2Request;
@@ -822,6 +824,256 @@ class UaaTokenServicesTests {
                             }, 2592000, timeService);
             return new RefreshTokenCreator(false, tokenValidityResolver,
                     tokenEndpointBuilder, timeService, keyInfoService);
+        }
+    }
+
+    @Nested
+    @DisplayName("when token enhancer overrides sub and aud")
+    class WhenTokenEnhancerOverridesSubAndAud {
+
+        @Test
+        @DisplayName("enhancer sub and aud claims win over UAA defaults")
+        void enhancerSubAndAudClaimsWinOverUaaDefaults() {
+            UaaTokenEnhancer testEnhancer = new UaaTokenEnhancer() {
+                @Override
+                public Map<String, String> getExternalAttributes(OAuth2Authentication authentication) {
+                    return Map.of();
+                }
+
+                @Override
+                public Map<String, Object> enhance(Map<String, Object> claims, OAuth2Authentication authentication) {
+                    Map<String, Object> result = new HashMap<>();
+                    result.put("sub", "enhancer-sub");
+                    result.put("aud", List.of("enhancer-aud"));
+                    return result;
+                }
+            };
+
+            tokenServices.setUaaTokenEnhancers(List.of(testEnhancer));
+
+            try {
+                AuthorizationRequest authorizationRequest = constructAuthorizationRequest(
+                        clientId, GRANT_TYPE_CLIENT_CREDENTIALS, CLIENT_SCOPES.split(","));
+                OAuth2Authentication authentication = new OAuth2Authentication(
+                        authorizationRequest.createOAuth2Request(), null);
+
+                OAuth2AccessToken accessToken = tokenServices.createAccessToken(authentication);
+
+                Jwt jwt = JwtHelper.decode(accessToken.getValue());
+                Map<String, Object> tokenClaims = JsonUtils.readValue(jwt.getClaims(),
+                        new TypeReference<Map<String, Object>>() {});
+                assertThat(tokenClaims).containsEntry("sub", "enhancer-sub");
+                // JWT RFC 7519 §4.1.3: single-audience MAY be serialized as a plain string
+                Object aud = tokenClaims.get("aud");
+                if (aud instanceof String s) {
+                    assertThat(s).isEqualTo("enhancer-aud");
+                } else {
+                    assertThat(aud).asInstanceOf(InstanceOfAssertFactories.list(Object.class))
+                            .containsExactly("enhancer-aud");
+                }
+            } finally {
+                tokenServices.setUaaTokenEnhancers(new ArrayList<>());
+            }
+        }
+    }
+
+    @Nested
+    @DisplayName("when token enhancer attempts to override protected claims")
+    class WhenTokenEnhancerAttemptsToOverrideProtectedClaims {
+
+        @Test
+        @DisplayName("enhancer cannot override client_id, authorities, scope, or iss")
+        void enhancerCannotOverrideProtectedClaims() {
+            UaaTokenEnhancer maliciousEnhancer = new UaaTokenEnhancer() {
+                @Override
+                public Map<String, String> getExternalAttributes(OAuth2Authentication authentication) {
+                    return Map.of();
+                }
+
+                @Override
+                public Map<String, Object> enhance(Map<String, Object> claims, OAuth2Authentication authentication) {
+                    Map<String, Object> result = new HashMap<>();
+                    result.put("client_id", "some-other-client");
+                    result.put("cid", "some-other-client");
+                    result.put("authorities", List.of("uaa.admin"));
+                    result.put("scope", List.of("uaa.admin"));
+                    result.put("iss", "https://attacker.example.com/oauth/token");
+                    result.put("grant_type", "authorization_code");
+                    return result;
+                }
+            };
+
+            tokenServices.setUaaTokenEnhancers(List.of(maliciousEnhancer));
+
+            try {
+                AuthorizationRequest authorizationRequest = constructAuthorizationRequest(
+                        clientId, GRANT_TYPE_CLIENT_CREDENTIALS, CLIENT_SCOPES.split(","));
+                OAuth2Authentication authentication = new OAuth2Authentication(
+                        authorizationRequest.createOAuth2Request(), null);
+
+                OAuth2AccessToken accessToken = tokenServices.createAccessToken(authentication);
+
+                Jwt jwt = JwtHelper.decode(accessToken.getValue());
+                Map<String, Object> tokenClaims = JsonUtils.readValue(jwt.getClaims(),
+                        new TypeReference<Map<String, Object>>() {});
+
+                assertThat(tokenClaims)
+                        .as("client_id must remain the authenticated client, not the enhancer-supplied value")
+                        .containsEntry("client_id", clientId)
+                        .containsEntry("cid", clientId);
+                assertThat(tokenClaims.get("iss"))
+                        .as("iss must remain UAA's own token endpoint, not the enhancer-supplied value")
+                        .isNotEqualTo("https://attacker.example.com/oauth/token");
+                assertThat(tokenClaims.get("grant_type"))
+                        .as("grant_type must remain the actual grant used, not the enhancer-supplied value")
+                        .isEqualTo(GRANT_TYPE_CLIENT_CREDENTIALS);
+                assertThat(tokenClaims.get("authorities"))
+                        .as("authorities must remain the client's actual granted scopes")
+                        .asInstanceOf(InstanceOfAssertFactories.list(Object.class))
+                        .doesNotContain("uaa.admin");
+                assertThat(tokenClaims.get("scope"))
+                        .as("scope must remain the actually granted scopes, not the enhancer-supplied value")
+                        .asInstanceOf(InstanceOfAssertFactories.list(Object.class))
+                        .doesNotContain("uaa.admin");
+            } finally {
+                tokenServices.setUaaTokenEnhancers(new ArrayList<>());
+            }
+        }
+
+        @Test
+        @DisplayName("enhancer-supplied custom (non-reserved) claims still apply")
+        void enhancerCanStillAddCustomClaims() {
+            UaaTokenEnhancer testEnhancer = new UaaTokenEnhancer() {
+                @Override
+                public Map<String, String> getExternalAttributes(OAuth2Authentication authentication) {
+                    return Map.of();
+                }
+
+                @Override
+                public Map<String, Object> enhance(Map<String, Object> claims, OAuth2Authentication authentication) {
+                    return Map.of("cf.app", "app-guid", "cnf", Map.of("x5t#S256", "thumbprint"));
+                }
+            };
+
+            tokenServices.setUaaTokenEnhancers(List.of(testEnhancer));
+
+            try {
+                AuthorizationRequest authorizationRequest = constructAuthorizationRequest(
+                        clientId, GRANT_TYPE_CLIENT_CREDENTIALS, CLIENT_SCOPES.split(","));
+                OAuth2Authentication authentication = new OAuth2Authentication(
+                        authorizationRequest.createOAuth2Request(), null);
+
+                OAuth2AccessToken accessToken = tokenServices.createAccessToken(authentication);
+
+                Jwt jwt = JwtHelper.decode(accessToken.getValue());
+                Map<String, Object> tokenClaims = JsonUtils.readValue(jwt.getClaims(),
+                        new TypeReference<Map<String, Object>>() {});
+
+                assertThat(tokenClaims).containsEntry("cf.app", "app-guid");
+                assertThat(tokenClaims).containsKey("cnf");
+            } finally {
+                tokenServices.setUaaTokenEnhancers(new ArrayList<>());
+            }
+        }
+    }
+
+    @Nested
+    @DisplayName("when an id_token enhancer is provided")
+    @DefaultTestContext
+    @TestPropertySource(properties = {"uaa.url=https://uaa.some.test.domain.com:555/uaa", "jwt.token.refresh.format=jwt"})
+    class WhenAnIdTokenEnhancerIsProvided {
+
+        @BeforeEach
+        void ensureClientIsUp() {
+            assumeTrue(waitForClient(clientId, 3), "Test client jku_test not up yet");
+        }
+
+        @DisplayName("the enhancer adds a complex auth_info claim to the id_token")
+        @ParameterizedTest
+        @ValueSource(strings = {GRANT_TYPE_PASSWORD, GRANT_TYPE_AUTHORIZATION_CODE})
+        void enhancerAddsAuthInfoClaim(String grantType) {
+            IdTokenEnhancer authInfoEnhancer = enhancementContext -> {
+                Map<String, Object> authInfo = new HashMap<>();
+                authInfo.put("access_token_id", enhancementContext.getAccessTokenClaim("jti"));
+                authInfo.put("access_token_expiration", enhancementContext.getAccessTokenClaim("exp"));
+                authInfo.put("refresh_token_id", enhancementContext.getRefreshTokenClaim("jti"));
+                authInfo.put("refresh_token_expiration", enhancementContext.getRefreshTokenClaim("exp"));
+                enhancementContext.setClaim("auth_info", authInfo);
+            };
+            tokenServices.setIdTokenClaimEnhancer(new IdTokenClaimEnhancer(List.of(authInfoEnhancer), false));
+
+            try {
+                AuthorizationRequest authorizationRequest = constructAuthorizationRequest(clientId, grantType, "openid");
+                OAuth2Authentication authentication = constructUserAuthenticationFromAuthzRequest(authorizationRequest, "admin", "uaa");
+
+                CompositeToken token = (CompositeToken) tokenServices.createAccessToken(authentication);
+
+                Map<String, Object> idClaims = decodeClaims(token.getIdTokenValue());
+                assertThat(idClaims).containsKey("auth_info");
+
+                @SuppressWarnings("unchecked")
+                Map<String, Object> authInfo = (Map<String, Object>) idClaims.get("auth_info");
+                assertThat(authInfo).containsKeys(
+                        "access_token_id", "access_token_expiration", "refresh_token_id", "refresh_token_expiration");
+
+                // access-token linkage is real: the claim equals the issued access token's jti
+                Map<String, Object> accessClaims = decodeClaims(token.getValue());
+                assertThat(authInfo.get("access_token_id")).isEqualTo(accessClaims.get("jti"));
+                assertThat(authInfo.get("access_token_expiration")).isNotNull();
+
+                // refresh-token linkage: the claim equals the issued refresh token's jti.
+                // NOTE: this drives the remaining wiring change -- createCompositeToken currently passes
+                // additionalRootClaims as the refresh-token claims, which does NOT contain the refresh
+                // token's own jti/exp. Feed the issued refresh token's real claims to the context to
+                // make these two assertions pass.
+                assertThat(token.getRefreshToken()).isNotNull();
+                Map<String, Object> refreshClaims = decodeClaims(token.getRefreshToken().getValue());
+                assertThat(authInfo.get("refresh_token_id")).isEqualTo(refreshClaims.get("jti"));
+                assertThat(authInfo.get("refresh_token_expiration")).isNotNull();
+            } finally {
+                tokenServices.setIdTokenClaimEnhancer(IdTokenClaimEnhancer.noOp());
+            }
+        }
+
+        @DisplayName("the enhancer receives empty refresh token claims when no refresh token is issued")
+        @Test
+        void enhancerReceivesEmptyRefreshTokenClaimsWhenNoneIssued() {
+            IdTokenEnhancer authInfoEnhancer = enhancementContext -> {
+                enhancementContext.setClaim("refresh_token_claims_size", enhancementContext.getRefreshTokenClaims().size());
+            };
+            tokenServices.setIdTokenClaimEnhancer(new IdTokenClaimEnhancer(List.of(authInfoEnhancer), false));
+
+            try {
+                AuthorizationRequest authorizationRequest = constructAuthorizationRequest(clientId, GRANT_TYPE_IMPLICIT, "openid");
+                OAuth2Authentication authentication = constructUserAuthenticationFromAuthzRequest(authorizationRequest, "admin", "uaa");
+
+                CompositeToken token = (CompositeToken) tokenServices.createAccessToken(authentication);
+
+                Map<String, Object> idClaims = decodeClaims(token.getIdTokenValue());
+                assertThat(idClaims.get("refresh_token_claims_size")).isEqualTo(0);
+            } finally {
+                tokenServices.setIdTokenClaimEnhancer(IdTokenClaimEnhancer.noOp());
+            }
+        }
+
+        private Map<String, Object> decodeClaims(String jwt) {
+            return JsonUtils.readValue(JwtHelper.decode(jwt).getClaims(), new TypeReference<Map<String, Object>>() {});
+        }
+    }
+
+    @Nested
+    @DisplayName("when jwt.token.idToken.enhancer.allowClaimModification is configured")
+    @DefaultTestContext
+    @TestPropertySource(properties = {"uaa.url=https://uaa.some.test.domain.com:555/uaa", "jwt.token.idToken.enhancer.allowClaimModification=true"})
+    class WhenAllowClaimModificationIsConfigured {
+
+        @Autowired
+        private IdTokenClaimEnhancer idTokenClaimEnhancer;
+
+        @DisplayName("the wired enhancer bean reads the boolean from configuration")
+        @Test
+        void beanReadsTheConfiguredFlag() {
+            assertThat(idTokenClaimEnhancer.isClaimModificationAllowed()).isTrue();
         }
     }
 

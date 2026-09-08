@@ -115,6 +115,7 @@ or `$CLOUDFOUNDRY_CONFIG_PATH/uaa.yml`.
 | <a href="#jwttokenrefreshrotate"><img src="images/click-me.png" width="14" height="14"/></a> `jwt.token.refresh.rotate` | `false`| Rotate refresh tokens|
 | <a href="#jwttokenrefreshrestrict_grant"><img src="images/click-me.png" width="14" height="14"/></a> `jwt.token.refresh.restrict_grant` | —| Restrict refresh token grant|
 | <a href="#jwttokenclaimsexclude"><img src="images/click-me.png" width="14" height="14"/></a> `jwt.token.claims.exclude` | `[]`| Claims excluded from tokens|
+| <a href="#jwttokenidtokenenhancerallowclaimmodification"><img src="images/click-me.png" width="14" height="14"/></a> `jwt.token.idToken.enhancer.allowClaimModification` | `false`| Allow id_token enhancers to modify existing claims|
 
 ### OAuth Clients & Users
 
@@ -125,6 +126,7 @@ or `$CLOUDFOUNDRY_CONFIG_PATH/uaa.yml`.
 | <a href="#oauthclientautoapprove"><img src="images/click-me.png" width="14" height="14"/></a> `oauth.client.autoapprove` | `[]`| Clients auto-approved for all scopes|
 | <a href="#oauthuserauthorities"><img src="images/click-me.png" width="14" height="14"/></a> `oauth.user.authorities` | (see details)| Default authorities for new users|
 | <a href="#clientmaxcount"><img src="images/click-me.png" width="14" height="14"/></a> `clientMaxCount` | `500`| Max clients returned by list endpoint|
+| <a href="#uaamtls-enabled"><img src="images/click-me.png" width="14" height="14"/></a> `uaa.mtls-enabled` | `false`| Enables RFC 8705 mutual-TLS client authentication|
 
 ### Password Policy
 
@@ -289,6 +291,7 @@ or `$CLOUDFOUNDRY_CONFIG_PATH/uaa.yml`.
 | <a href="#ldapbaseuserdnpattern"><img src="images/click-me.png" width="14" height="14"/></a> `ldap.base.userDnPattern` | —| DN pattern for simple bind|
 | <a href="#ldapbasereferral"><img src="images/click-me.png" width="14" height="14"/></a> `ldap.base.referral` | —| LDAP referral handling|
 | <a href="#ldapsslskipverification"><img src="images/click-me.png" width="14" height="14"/></a> `ldap.ssl.skipverification` | `false`| Skip LDAP SSL verification|
+| <a href="#ldapsslcacertificates"><img src="images/click-me.png" width="14" height="14"/></a> `ldap.ssl.caCertificates` | —| PEM-encoded CA certificates to trust for LDAPS connections|
 | <a href="#ldapgroupsfile"><img src="images/click-me.png" width="14" height="14"/></a> `ldap.groups.file` | —| LDAP groups configuration file|
 | <a href="#ldapgroupssearchbase"><img src="images/click-me.png" width="14" height="14"/></a> `ldap.groups.searchBase` | —| LDAP group search base|
 | <a href="#ldapgroupsgroupsearchfilter"><img src="images/click-me.png" width="14" height="14"/></a> `ldap.groups.groupSearchFilter` | —| Group membership filter|
@@ -1122,6 +1125,29 @@ the `authorities` claim: `exclude: [authorities]`.
 
 ---
 
+### `jwt.token.idToken.enhancer.allowClaimModification`
+
+**Default:** `false`
+**Source:** `@Value("${jwt.token.idToken.enhancer.allowClaimModification:false}")` in
+[`OauthEndpointBeanConfiguration`][oauth-endpoint-bean-config]
+**Type:** `boolean`
+
+Controls whether registered `IdTokenEnhancer` beans may overwrite claims that already
+exist on the `id_token`. When `false` (the default), enhancers may only add new claims;
+any attempt to change a claim already set by `IdTokenCreator` or by another enhancer is
+ignored and the original value is preserved. Set to `true` to let enhancers replace the
+value of existing claims. Adding brand-new claims never requires this flag.
+
+[oauth-endpoint-bean-config]: ../server/src/main/java/org/cloudfoundry/identity/uaa/oauth/beans/OauthEndpointBeanConfiguration.java
+
+Enhancer implementations register as `IdTokenEnhancer` beans and read the
+`OAuth2Authentication`, the access-token claims, and the refresh-token claims through the
+supplied `IdTokenEnhancementContext`.
+
+[Back to table](#jwt-token-policy)
+
+---
+
 ### `oauth.clients`
 
 **Default:** `{}` (empty)
@@ -1191,6 +1217,39 @@ Default authorities (group memberships) automatically assigned to every new user
 
 Maximum number of clients returned in a single list/search response from the
 client admin API (`/oauth/clients`).
+
+[Back to table](#oauth-clients--users)
+
+---
+
+### `uaa.mtls-enabled`
+
+**Default:** `false`
+**Source:** `@Value("${uaa.mtls-enabled:false}")` in [`SpringServletXmlBeansConfiguration`](../server/src/main/java/org/cloudfoundry/identity/uaa/SpringServletXmlBeansConfiguration.java), [`ClientAdminBootstrap`](../server/src/main/java/org/cloudfoundry/identity/uaa/client/ClientAdminBootstrap.java), [`ZoneEndpointsClientDetailsValidator`](../server/src/main/java/org/cloudfoundry/identity/uaa/zone/ZoneEndpointsClientDetailsValidator.java), [`MtlsClientAuthTomcatCustomizer`](../server/src/main/java/org/cloudfoundry/identity/uaa/web/tomcat/MtlsClientAuthTomcatCustomizer.java)
+**Type:** `boolean`
+
+Master switch enabling RFC 8705 mutual-TLS client authentication (`tls_client_auth`)
+deployment-wide. This is **connector-wide**: it affects every TLS connection to this UAA
+instance, not just requests to the mTLS token endpoint (`/oauth/mtls/token`).
+[`SpringServletXmlBeansConfiguration`](../server/src/main/java/org/cloudfoundry/identity/uaa/SpringServletXmlBeansConfiguration.java)
+also uses this value to wire
+[`ClientAdminEndpointsValidator`](../server/src/main/java/org/cloudfoundry/identity/uaa/client/ClientAdminEndpointsValidator.java)'s
+`mtlsEnabled` constructor argument.
+
+When `true`, the embedded Tomcat connector is reconfigured to request a client certificate
+during every TLS handshake (`certificateVerification=optionalNoCA`), without validating it
+against any CA at the transport layer -- the trust decision is deferred entirely to per-client
+application logic (see [`docs/UAA-Client-Authentication.md`](UAA-Client-Authentication.md) for
+the per-client `tls-client-auth-*` properties). Enabling this also switches the connector to the
+FIPS BouncyCastle JSSE provider, required for TLS 1.3 client-certificate support (OpenJDK's JSSE
+does not implement server-side TLS 1.3 post-handshake client-certificate requests).
+
+When `false` (the default), no client certificate is requested at the TLS layer at all, and any
+client configured with a `tls-client-auth-ca` property fails validation at creation/update time.
+
+```yaml
+uaa.mtls-enabled: true
+```
 
 [Back to table](#oauth-clients--users)
 
@@ -1931,6 +1990,11 @@ External OAuth 2.0 and OIDC provider definitions. Each provider entry includes:
 - `linkText` — Text for the login link
 - `relyingPartyId` / `relyingPartySecret` — Client credentials
 - `attributeMappings` — Attribute mapping configuration
+- `skipSslValidation` — Skip TLS validation when calling the provider. This disables both
+  certificate chain validation and hostname verification, offering no protection against
+  man-in-the-middle attacks; it is intended for development and diagnostics. To trust a private
+  CA in production, use `caCertificates` instead, which keeps validation enabled. Default `false`
+- `caCertificates` — List of PEM-encoded CA certificates to trust, in addition to the JVM's default trust store, when calling the provider. Ignored if `skipSslValidation` is `true`
 
 [Back to table](#login--branding)
 
@@ -2099,7 +2163,8 @@ Bootstrap SAML Identity Provider definitions. Each entry is keyed by a provider 
 | `emailDomain` | `List<String>` | Email domains used for IDP discovery |
 | `externalGroupsWhitelist` | `List<String>` | External group names to map |
 | `attributeMappings` | `Map<String, Object>` | Attribute mapping configuration |
-| `skipSslValidation` | `boolean` | Skip TLS validation when fetching metadata URL. Default `false` |
+| `skipSslValidation` | `boolean` | Skip TLS validation when fetching metadata URL. Disables both certificate chain validation and hostname verification, offering no protection against man-in-the-middle attacks; intended for development and diagnostics. Use `caCertificates` to trust a private CA in production. Default `false` |
+| `caCertificates` | `List<String>` | PEM-encoded CA certificates to trust, in addition to the JVM's default trust store, when fetching the metadata URL. Ignored if `skipSslValidation` is `true` |
 | `storeCustomAttributes` | `boolean` | Persist custom SAML attributes on the user. Default `true` |
 | `authnContext` | `List<String>` | Requested authentication context class references |
 | `override` | `boolean` | Overwrite an existing provider with the same alias on startup. Default `true` |
@@ -2633,6 +2698,21 @@ How LDAP referrals are handled. Common values: `follow`, `ignore`.
 
 When `true`, skips SSL certificate verification for LDAPS connections.
 Should only be used in development/testing.
+
+[Back to table](#ldap)
+
+---
+
+### `ldap.ssl.caCertificates`
+
+**Default:** — (not set)
+**Source:** [`LdapUtils`](../server/src/main/java/org/cloudfoundry/identity/uaa/util/LdapUtils.java), [`LdapIdentityProviderDefinition`](../model/src/main/java/org/cloudfoundry/identity/uaa/provider/LdapIdentityProviderDefinition.java)
+**Type:** `List<String>`
+
+List of PEM-encoded CA certificates to trust, in addition to the JVM's default trust
+store, for LDAPS connections to this LDAP server. Useful when the LDAP server's certificate
+chain is signed by a private/internal certificate authority and importing it into the JVM
+truststore is not desired. Ignored if `ldap.ssl.skipverification` is `true`.
 
 [Back to table](#ldap)
 

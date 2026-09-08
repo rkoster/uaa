@@ -22,8 +22,12 @@ import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.saml2.core.Saml2ParameterNames;
 import org.springframework.security.web.savedrequest.SavedRequest;
+import org.cloudfoundry.identity.uaa.zone.IdentityZone;
+import org.cloudfoundry.identity.uaa.zone.IdentityZoneHolder;
 
 import jakarta.servlet.http.HttpSession;
+
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.cloudfoundry.identity.uaa.web.UaaSavedRequestAwareAuthenticationSuccessHandler.FORM_REDIRECT_PARAMETER;
@@ -76,7 +80,7 @@ class UaaSavedRequestAwareAuthenticationSuccessHandlerTests {
     }
 
     @Test
-    void onAuthenticationSuccess_noSavedRequest_hasRelayStateUrl() throws Exception {
+    void onAuthenticationSuccess_noSavedRequest_hasRelayStateUrl_notWhitelisted() throws Exception {
         String redirectUri = "https://test.com/test2";
         request.setParameter(Saml2ParameterNames.RELAY_STATE, redirectUri);
 
@@ -84,7 +88,29 @@ class UaaSavedRequestAwareAuthenticationSuccessHandlerTests {
         var authentication = mock(Authentication.class);
         handler.onAuthenticationSuccess(request, response, authentication);
 
-        assertThat(response.getRedirectedUrl()).isEqualTo(redirectUri);
+        assertThat(response.getRedirectedUrl()).isEqualTo("/");
+    }
+
+    @Test
+    void onAuthenticationSuccess_noSavedRequest_hasRelayStateUrl_whitelisted() throws Exception {
+        String redirectUri = "https://test.com/test2";
+        request.setParameter(Saml2ParameterNames.RELAY_STATE, redirectUri);
+
+        IdentityZone zone = IdentityZoneHolder.get();
+        List<String> originalWhitelist = zone.getConfig().getLinks().getLogout().getWhitelist();
+        zone.getConfig().getLinks().getLogout().setWhitelist(List.of(redirectUri));
+        IdentityZoneHolder.set(zone);
+
+        try {
+            var response = new MockHttpServletResponse();
+            var authentication = mock(Authentication.class);
+            handler.onAuthenticationSuccess(request, response, authentication);
+
+            assertThat(response.getRedirectedUrl()).isEqualTo(redirectUri);
+        } finally {
+            zone.getConfig().getLinks().getLogout().setWhitelist(originalWhitelist);
+            IdentityZoneHolder.set(zone);
+        }
     }
 
     @Test

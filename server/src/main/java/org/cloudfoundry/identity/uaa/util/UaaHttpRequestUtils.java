@@ -26,9 +26,10 @@ import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
 import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManagerBuilder;
 import org.apache.hc.client5.http.socket.ConnectionSocketFactory;
 import org.apache.hc.client5.http.socket.PlainConnectionSocketFactory;
+import org.apache.hc.client5.http.ssl.DefaultHostnameVerifier;
 import org.apache.hc.client5.http.ssl.NoopHostnameVerifier;
 import org.apache.hc.client5.http.ssl.SSLConnectionSocketFactory;
-import org.apache.hc.client5.http.ssl.TrustSelfSignedStrategy;
+import org.apache.hc.client5.http.ssl.TrustAllStrategy;
 import org.apache.hc.core5.http.HeaderElement;
 import org.apache.hc.core5.http.HttpHeaders;
 import org.apache.hc.core5.http.HttpRequest;
@@ -134,6 +135,11 @@ public abstract class UaaHttpRequestUtils {
         return createRequestFactory(getClientBuilder(skipSslValidation, config), config.connectionRequestTimeoutInMs());
     }
 
+    public static ClientHttpRequestFactory createRequestFactory(SSLContext sslContext, int connectTimeout, int readTimeout, RestTemplateConfig restTemplateConfig) {
+        HttpClientConfig config = new HttpClientConfig(restTemplateConfig.maxTotal, restTemplateConfig.maxPerRoute, restTemplateConfig.maxKeepAlive, restTemplateConfig.validateAfterInactivity, restTemplateConfig.retryCount, connectTimeout, readTimeout, connectTimeout);
+        return createRequestFactory(getClientBuilder(sslContext, config), config.connectionRequestTimeoutInMs());
+    }
+
     protected static ClientHttpRequestFactory createRequestFactory(HttpClientBuilder builder, int connectionRequestTimeoutInMs) {
         HttpComponentsClientHttpRequestFactory factory = new HttpComponentsClientHttpRequestFactory(builder.build());
         factory.setConnectionRequestTimeout(connectionRequestTimeoutInMs);
@@ -141,10 +147,7 @@ public abstract class UaaHttpRequestUtils {
     }
 
     static HttpClientBuilder getClientBuilder(boolean skipSslValidation, HttpClientConfig config) {
-        HttpClientBuilder builder = HttpClients.custom()
-                .useSystemProperties()
-                .setUserTokenHandler(NoopUserTokenHandler.INSTANCE)
-                .setRedirectStrategy(new DefaultRedirectStrategy());
+        HttpClientBuilder builder = newClientBuilder();
         PoolingHttpClientConnectionManager cm;
         if (skipSslValidation) {
             SSLContext sslContext = getNonValidatingSslContext();
@@ -160,6 +163,35 @@ public abstract class UaaHttpRequestUtils {
         } else {
             cm = new PoolingHttpClientConnectionManager();
         }
+        return configureConnectionManager(builder, cm, config);
+    }
+
+    /**
+     * Like {@link #getClientBuilder(boolean, HttpClientConfig)}, but validates against a caller-supplied
+     * {@link SSLContext} instead of choosing between the skip-validation and JDK-default-truststore paths.
+     * This is a real-validation path (not skip-validation), so hostname verification stays on.
+     */
+    static HttpClientBuilder getClientBuilder(SSLContext sslContext, HttpClientConfig config) {
+        HttpClientBuilder builder = newClientBuilder();
+        final String[] supportedProtocols = split(System.getProperty("https.protocols"));
+        final String[] supportedCipherSuites = split(System.getProperty("https.cipherSuites"));
+        SSLConnectionSocketFactory sslSocketFactory = new SSLConnectionSocketFactory(sslContext, supportedProtocols, supportedCipherSuites, new DefaultHostnameVerifier());
+        Registry<ConnectionSocketFactory> socketFactoryRegistry = RegistryBuilder.<ConnectionSocketFactory>create()
+                .register("https", sslSocketFactory)
+                .register("http", PlainConnectionSocketFactory.getSocketFactory())
+                .build();
+        PoolingHttpClientConnectionManager cm = new PoolingHttpClientConnectionManager(socketFactoryRegistry);
+        return configureConnectionManager(builder, cm, config);
+    }
+
+    private static HttpClientBuilder newClientBuilder() {
+        return HttpClients.custom()
+                .useSystemProperties()
+                .setUserTokenHandler(NoopUserTokenHandler.INSTANCE)
+                .setRedirectStrategy(new DefaultRedirectStrategy());
+    }
+
+    private static HttpClientBuilder configureConnectionManager(HttpClientBuilder builder, PoolingHttpClientConnectionManager cm, HttpClientConfig config) {
         cm.setMaxTotal(config.poolSize());
         cm.setDefaultMaxPerRoute(config.defaultMaxPerRoute());
         cm.setValidateAfterInactivity(TimeValue.of(config.validateAfterInactivity(), TimeUnit.MILLISECONDS));
@@ -190,9 +222,27 @@ public abstract class UaaHttpRequestUtils {
         return millis <= 0 ? Timeout.DISABLED : Timeout.ofMilliseconds(millis);
     }
 
+    /**
+     * The {@code skipSslValidation=true} escape hatch: accepts <em>any</em> server certificate chain,
+     * of any length, from any issuer. Combined with the {@link NoopHostnameVerifier} applied alongside
+     * it in {@link #getClientBuilder(boolean, HttpClientConfig)}, this disables peer authentication
+     * entirely and offers no protection against man-in-the-middle attacks.
+     * <p>
+     * This must be {@link TrustAllStrategy}, not {@code TrustSelfSignedStrategy}. The latter's
+     * {@code isTrusted} is {@code chain.length == 1}, and Apache's {@code TrustManagerDelegate} falls
+     * through to normal JDK PKIX validation whenever a strategy returns false -- so it silently
+     * validated (and rejected) every chain of two or more certificates, which is what any real
+     * identity provider behind a CA hierarchy serves. That made the flag a no-op precisely where
+     * operators needed it.
+     * <p>
+     * To trust a private CA <em>without</em> giving up validation, use the per-IDP
+     * {@code caCertificates} property instead, which is served by
+     * {@link org.cloudfoundry.identity.uaa.security.IdpOutboundTrustCache} and keeps both chain
+     * validation and hostname verification switched on.
+     */
     private static SSLContext getNonValidatingSslContext() {
         try {
-            return new SSLContextBuilder().loadTrustMaterial(null, new TrustSelfSignedStrategy()).build();
+            return new SSLContextBuilder().loadTrustMaterial(TrustAllStrategy.INSTANCE).build();
         } catch (KeyManagementException | KeyStoreException | NoSuchAlgorithmException e) {
             throw new RuntimeException(e);
         }

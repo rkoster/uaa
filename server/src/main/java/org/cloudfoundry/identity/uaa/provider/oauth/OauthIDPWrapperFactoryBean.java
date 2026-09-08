@@ -146,6 +146,7 @@ public class OauthIDPWrapperFactoryBean {
         idpDefinition.setAddShadowUserOnLogin(idpDefinitionMap.get("addShadowUserOnLogin") == null ? true : (boolean) idpDefinitionMap.get("addShadowUserOnLogin"));
         idpDefinition.setStoreCustomAttributes(idpDefinitionMap.get(STORE_CUSTOM_ATTRIBUTES_NAME) == null ? true : (boolean) idpDefinitionMap.get(STORE_CUSTOM_ATTRIBUTES_NAME));
         idpDefinition.setSkipSslValidation(idpDefinitionMap.get("skipSslValidation") == null ? false : (boolean) idpDefinitionMap.get("skipSslValidation"));
+        idpDefinition.setCaCertificates((List<String>) idpDefinitionMap.get("caCertificates"));
         idpDefinition.setTokenKey((String) idpDefinitionMap.get("tokenKey"));
         idpDefinition.setIssuer((String) idpDefinitionMap.get("issuer"));
         idpDefinition.setAttributeMappings((Map<String, Object>) idpDefinitionMap.get(ATTRIBUTE_MAPPINGS));
@@ -190,7 +191,7 @@ public class OauthIDPWrapperFactoryBean {
             idpDefinition.setCacheJwks((boolean) idpDefinitionMap.get("cacheJwks"));
         }
         if (idpDefinitionMap.get("authMethod") instanceof String definedAuthMethod) {
-            if (ClientAuthentication.isMethodSupported(definedAuthMethod)) {
+            if (ClientAuthentication.isExternalOAuthMethodSupported(definedAuthMethod)) {
                 idpDefinition.setAuthMethod(definedAuthMethod);
             } else {
                 throw new IllegalArgumentException("Invalid IdP authentication method");

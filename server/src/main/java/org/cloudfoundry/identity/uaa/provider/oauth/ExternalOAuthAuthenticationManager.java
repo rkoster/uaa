@@ -19,11 +19,11 @@ import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSHeader;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpSession;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.codec.binary.Base64;
 import org.apache.commons.lang3.ObjectUtils;
 import org.cloudfoundry.identity.uaa.authentication.AbstractClientParametersAuthenticationFilter;
 import org.cloudfoundry.identity.uaa.authentication.ProviderConfigurationException;
@@ -58,6 +58,8 @@ import org.cloudfoundry.identity.uaa.provider.AbstractExternalOAuthIdentityProvi
 import org.cloudfoundry.identity.uaa.provider.ExternalIdentityProviderDefinition;
 import org.cloudfoundry.identity.uaa.provider.IdentityProvider;
 import org.cloudfoundry.identity.uaa.provider.IdentityProviderProvisioning;
+import org.cloudfoundry.identity.uaa.impl.config.RestTemplateConfig;
+import org.cloudfoundry.identity.uaa.security.IdpOutboundTrustCache;
 import org.cloudfoundry.identity.uaa.provider.OIDCIdentityProviderDefinition;
 import org.cloudfoundry.identity.uaa.provider.RawExternalOAuthIdentityProviderDefinition;
 import org.cloudfoundry.identity.uaa.user.UaaUser;
@@ -101,6 +103,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.Collection;
 import java.util.Date;
 import java.util.HashMap;
@@ -150,6 +153,8 @@ public class ExternalOAuthAuthenticationManager extends ExternalLoginAuthenticat
     private final KeyInfoService keyInfoService;
     private final IdentityZoneManager identityZoneManager;
     private final boolean externalGroupsFromMappedAuthorities;
+    private final IdpOutboundTrustCache trustCache;
+    private final RestTemplateConfig restTemplateConfig;
 
     public ExternalOAuthAuthenticationManager(
             IdentityProviderProvisioning providerProvisioning,
@@ -161,6 +166,23 @@ public class ExternalOAuthAuthenticationManager extends ExternalLoginAuthenticat
             OidcMetadataFetcher oidcMetadataFetcher,
             boolean externalGroupsFromMappedAuthorities
     ) {
+        this(providerProvisioning, identityZoneManager, trustingRestTemplate, nonTrustingRestTemplate,
+                tokenEndpointBuilder, keyInfoService, oidcMetadataFetcher, externalGroupsFromMappedAuthorities,
+                new IdpOutboundTrustCache(), RestTemplateConfig.createDefaults());
+    }
+
+    public ExternalOAuthAuthenticationManager(
+            IdentityProviderProvisioning providerProvisioning,
+            IdentityZoneManager identityZoneManager,
+            RestTemplate trustingRestTemplate,
+            RestTemplate nonTrustingRestTemplate,
+            TokenEndpointBuilder tokenEndpointBuilder,
+            KeyInfoService keyInfoService,
+            OidcMetadataFetcher oidcMetadataFetcher,
+            boolean externalGroupsFromMappedAuthorities,
+            IdpOutboundTrustCache trustCache,
+            RestTemplateConfig restTemplateConfig
+    ) {
         super(providerProvisioning);
         this.identityZoneManager = identityZoneManager;
         this.trustingRestTemplate = trustingRestTemplate;
@@ -169,6 +191,8 @@ public class ExternalOAuthAuthenticationManager extends ExternalLoginAuthenticat
         this.keyInfoService = keyInfoService;
         this.oidcMetadataFetcher = oidcMetadataFetcher;
         this.externalGroupsFromMappedAuthorities = externalGroupsFromMappedAuthorities;
+        this.trustCache = trustCache;
+        this.restTemplateConfig = restTemplateConfig;
     }
 
     /**
@@ -241,6 +265,14 @@ public class ExternalOAuthAuthenticationManager extends ExternalLoginAuthenticat
     protected AuthenticationData getExternalAuthenticationDetails(final Authentication authentication) {
         final ExternalOAuthCodeToken codeToken = (ExternalOAuthCodeToken) authentication;
 
+        // When the caller supplies an explicit origin (interactive browser callback: /login/callback/{origin}),
+        // bind the presented id_token to that IdP's relying party (audience).
+        // When origin is omitted (JWT Bearer/password-grant token exchange), we still validate audience for
+        // external IdPs, but skip the relying-party audience binding for self-referencing (UAA-issued) tokens
+        // to allow the intended token-chaining behavior.
+        // minted for other clients in the same zone/origin - so it is exempt from that binding.
+        final boolean enforceRelyingPartyAudience = hasLength(codeToken.getOrigin());
+
         IdentityProvider provider = null;
         if (!hasLength(codeToken.getOrigin())) {
             provider = resolveOriginProvider(codeToken.getIdToken());
@@ -262,7 +294,7 @@ public class ExternalOAuthAuthenticationManager extends ExternalLoginAuthenticat
             final AuthenticationData authenticationData = new AuthenticationData();
             authenticationData.setOrigin(origin);
 
-            final Map<String, Object> claims = getClaimsFromToken(codeToken, provider);
+            final Map<String, Object> claims = getClaimsFromToken(codeToken, provider, enforceRelyingPartyAudience);
 
             if (claims == null) {
                 return null;
@@ -590,12 +622,11 @@ public class ExternalOAuthAuthenticationManager extends ExternalLoginAuthenticat
         return false;
     }
 
-    public RestTemplate getRestTemplate(AbstractExternalOAuthIdentityProviderDefinition config) {
-        if (config.isSkipSslValidation()) {
-            return trustingRestTemplate;
-        } else {
-            return nonTrustingRestTemplate;
-        }
+    public RestTemplate getRestTemplate(IdentityProvider<?> identityProvider) {
+        AbstractExternalOAuthIdentityProviderDefinition<?> config =
+                (AbstractExternalOAuthIdentityProviderDefinition<?>) identityProvider.getConfig();
+        return trustCache.resolveRestTemplate(identityProvider.getId(), config.getCaCertificates(), config.isSkipSslValidation(),
+                restTemplateConfig.timeout, restTemplateConfig.timeout, restTemplateConfig, trustingRestTemplate, nonTrustingRestTemplate);
     }
 
     protected String getResponseType(AbstractExternalOAuthIdentityProviderDefinition config) {
@@ -618,6 +649,14 @@ public class ExternalOAuthAuthenticationManager extends ExternalLoginAuthenticat
             ExternalOAuthCodeToken codeToken,
             final IdentityProvider<T> identityProvider
     ) {
+        return getClaimsFromToken(codeToken, identityProvider, true);
+    }
+
+    protected <T extends AbstractExternalOAuthIdentityProviderDefinition<T>> Map<String, Object> getClaimsFromToken(
+            ExternalOAuthCodeToken codeToken,
+            final IdentityProvider<T> identityProvider,
+            final boolean enforceRelyingPartyAudience
+    ) {
         String tokenFieldName = getTokenFieldName(identityProvider.getConfig());
         String token = getTokenFromCode(codeToken, identityProvider);
         if ("access_token".equals(tokenFieldName) && token != null && OAUTH20.equals(identityProvider.getType())) {
@@ -625,12 +664,20 @@ public class ExternalOAuthAuthenticationManager extends ExternalLoginAuthenticat
         } else {
             codeToken.setIdToken(token);
         }
-        return getClaimsFromToken(token, identityProvider);
+        return getClaimsFromToken(token, identityProvider, enforceRelyingPartyAudience);
     }
 
     protected <T extends AbstractExternalOAuthIdentityProviderDefinition<T>> Map<String, Object> getClaimsFromToken(
             String idToken,
             final IdentityProvider<T> identityProvider
+    ) {
+        return getClaimsFromToken(idToken, identityProvider, true);
+    }
+
+    protected <T extends AbstractExternalOAuthIdentityProviderDefinition<T>> Map<String, Object> getClaimsFromToken(
+            String idToken,
+            final IdentityProvider<T> identityProvider,
+            final boolean enforceRelyingPartyAudience
     ) {
         log.debug("Extracting claims from id_token");
         if (idToken == null) {
@@ -653,7 +700,7 @@ public class ExternalOAuthAuthenticationManager extends ExternalLoginAuthenticat
             String data = signedRequests[1];
             Map<String, Object> jsonData;
             try {
-                jsonData = JsonUtils.readValue(new String(Base64.decodeBase64(data), StandardCharsets.UTF_8), new TypeReference<>() {
+                jsonData = JsonUtils.readValue(new String(Base64.getUrlDecoder().decode(data), StandardCharsets.UTF_8), new TypeReference<>() {
                 });
                 //check signature algorithm
                 final var algorithm = Optional.ofNullable(jsonData)
@@ -665,8 +712,8 @@ public class ExternalOAuthAuthenticationManager extends ExternalLoginAuthenticat
                 }
                 // check if data is signed correctly using constant-time comparison
                 try {
-                    byte[] expectedMac = Base64.decodeBase64(hmacSignAndEncode(signedRequests[1], secret));
-                    byte[] suppliedMac = Base64.decodeBase64(signature);
+                    byte[] expectedMac = Base64.getUrlDecoder().decode(hmacSignAndEncode(signedRequests[1], secret));
+                    byte[] suppliedMac = Base64.getUrlDecoder().decode(signature);
                     if (!MessageDigest.isEqual(expectedMac, suppliedMac)) {
                         log.debug("Signature is not correct, possibly the data was tampered with! No claims returned.");
                         return null;
@@ -700,7 +747,7 @@ public class ExternalOAuthAuthenticationManager extends ExternalLoginAuthenticat
 
             log.debug("Performing token check with url:{}", requestUri);
             ResponseEntity<Map<String, Object>> responseEntity =
-                    getRestTemplate(config)
+                    getRestTemplate(identityProvider)
                             .exchange(requestUri, GET, requestEntity,
                                     new ParameterizedTypeReference<>() {
                                     }
@@ -708,13 +755,28 @@ public class ExternalOAuthAuthenticationManager extends ExternalLoginAuthenticat
             log.debug("Request completed with status:{}", responseEntity.getStatusCode());
             return responseEntity.getBody();
         } else {
-            JwtTokenSignedByThisUAA jwtToken = validateToken(idToken, config);
+            JwtTokenSignedByThisUAA jwtToken = validateToken(idToken, config, enforceRelyingPartyAudience);
             log.debug("Decoding id_token");
             Jwt decodeIdToken = jwtToken.getJwt();
             log.debug("Deserializing id_token claims");
 
-            return JsonUtils.readValue(decodeIdToken.getClaims(), new TypeReference<>() {
+            Map<String, Object> claims = JsonUtils.readValue(decodeIdToken.getClaims(), new TypeReference<>() {
             });
+            
+            if (config instanceof OIDCIdentityProviderDefinition) {
+                String nonceKey = SessionUtils.nonceParameterAttributeKeyForIdp(identityProvider.getOriginKey());
+                String expectedNonce = getSessionValue(nonceKey);
+                if (StringUtils.hasText(expectedNonce)) {
+                    Object tokenNonceObj = claims.get("nonce");
+                    String tokenNonce = tokenNonceObj instanceof String ? (String) tokenNonceObj : null;
+                    if (!expectedNonce.equals(tokenNonce)) {
+                        throw new InvalidTokenException("ID token nonce does not match session nonce");
+                    }
+                    clearSessionValue(nonceKey);
+                }
+            }
+            
+            return claims;
         }
     }
 
@@ -727,7 +789,11 @@ public class ExternalOAuthAuthenticationManager extends ExternalLoginAuthenticat
         }
     }
 
-    private JwtTokenSignedByThisUAA validateToken(String idToken, AbstractExternalOAuthIdentityProviderDefinition config) {
+    private JwtTokenSignedByThisUAA validateToken(
+            String idToken,
+            AbstractExternalOAuthIdentityProviderDefinition config,
+            boolean enforceRelyingPartyAudience
+    ) {
         log.debug("Validating id_token");
 
         JwtTokenSignedByThisUAA jwtToken;
@@ -735,6 +801,16 @@ public class ExternalOAuthAuthenticationManager extends ExternalLoginAuthenticat
         if (tokenEndpointBuilder.getTokenEndpoint(identityZoneManager.getCurrentIdentityZone()).equals(config.getIssuer())) {
             List<SignatureVerifier> signatureVerifiers = getTokenKeyForUaaOrigin();
             jwtToken = buildIdTokenValidator(idToken, new ChainedSignatureVerifier(signatureVerifiers), keyInfoService);
+            if (enforceRelyingPartyAudience && hasText(config.getRelyingPartyId())) {
+                // an explicitly registered self-referencing OIDC IdP must still bind the id_token
+                // to its own relying party for an interactive login, otherwise any token signed by
+                // this UAA instance (issued to any client, for any purpose) would be accepted as
+                // this IdP's id_token. Machine-to-machine token exchanges (JWT Bearer grant,
+                // password grant with an id_token) are exempt: they already authenticate the
+                // calling client to /oauth/token directly, and deliberately chain tokens minted for
+                // other clients in the same zone/origin.
+                jwtToken.checkAudience(config.getRelyingPartyId());
+            }
         } else {
             JsonWebKeySet<JsonWebKey> tokenKeyFromOAuth = getTokenKeyFromOAuth(config);
             jwtToken = buildIdTokenValidator(idToken, new ChainedSignatureVerifier(tokenKeyFromOAuth), keyInfoService)
@@ -769,6 +845,10 @@ public class ExternalOAuthAuthenticationManager extends ExternalLoginAuthenticat
             final IdentityProvider<T> provider
     ) {
         final T config = provider.getConfig();
+        if (ClientAuthentication.TLS_CLIENT_AUTH.equals(config.getAuthMethod())) {
+            throw new ProviderConfigurationException(
+                    "External OpenID Connect provider configuration does not support tls_client_auth.");
+        }
 
         if (StringUtils.hasText(codeToken.getIdToken()) && ID_TOKEN.equals(getResponseType(config))) {
             log.debug("ExternalOAuthCodeToken contains id_token, not exchanging code.");
@@ -841,7 +921,7 @@ public class ExternalOAuthAuthenticationManager extends ExternalLoginAuthenticat
         // A configuration that skips SSL/TLS validation requires clobbering the rest template request factory
         // setup by the bean initializer.
         ResponseEntity<Map<String, String>> responseEntity =
-                getRestTemplate(config)
+                getRestTemplate(provider)
                         .exchange(requestUri,
                                 HttpMethod.POST,
                                 requestEntity,
@@ -874,13 +954,25 @@ public class ExternalOAuthAuthenticationManager extends ExternalLoginAuthenticat
             ServletRequestAttributes attr = (ServletRequestAttributes) RequestContextHolder.currentRequestAttributes();
             return (String) SessionUtils.getStateParam(attr.getRequest().getSession(false), value);
         } catch (Exception e) {
-            log.warn("Exception", e);
+            log.warn("Failed to get session value for {}", value, e);
             return "";
         }
     }
 
+    private void clearSessionValue(String value) {
+        try {
+            ServletRequestAttributes attr = (ServletRequestAttributes) RequestContextHolder.currentRequestAttributes();
+            HttpSession session = attr.getRequest().getSession(false);
+            if (session != null) {
+                session.removeAttribute(value);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to clear session value for {}", value, e);
+        }
+    }
+
     private String getClientAuthHeader(AbstractExternalOAuthIdentityProviderDefinition config) {
-        String clientAuth = new String(Base64.encodeBase64((config.getRelyingPartyId() + ":" + config.getRelyingPartySecret()).getBytes()));
+        String clientAuth = Base64.getEncoder().encodeToString((config.getRelyingPartyId() + ":" + config.getRelyingPartySecret()).getBytes(StandardCharsets.UTF_8));
         return "Basic " + clientAuth;
     }
 
@@ -955,6 +1047,10 @@ public class ExternalOAuthAuthenticationManager extends ExternalLoginAuthenticat
     public String oauthTokenRequest(UaaAuthenticationDetails details, final IdentityProvider<OIDCIdentityProviderDefinition> identityProvider,
                                 String grantType, MultiValueMap<String, String> additionalParameters) {
         final OIDCIdentityProviderDefinition config = identityProvider.getConfig();
+        if (ClientAuthentication.TLS_CLIENT_AUTH.equals(config.getAuthMethod())) {
+            throw new ProviderConfigurationException(
+                    "External OpenID Connect provider configuration does not support tls_client_auth.");
+        }
 
         //Token per RestCall
         URL tokenUrl = config.getTokenUrl();
@@ -971,7 +1067,7 @@ public class ExternalOAuthAuthenticationManager extends ExternalLoginAuthenticat
             tokenUrl = Optional.ofNullable(config.getTokenUrl()).orElseThrow(() -> new ProviderConfigurationException("External OpenID Connect metadata is missing after discovery update."));
         }
         String calcAuthMethod = ClientAuthentication.getCalculatedMethod(config.getAuthMethod(), clientSecret != null, config.getJwtClientAuthentication() != null);
-        RestTemplate rt = config.isSkipSslValidation() ? trustingRestTemplate : nonTrustingRestTemplate;
+        RestTemplate rt = getRestTemplate(identityProvider);
 
         HttpHeaders headers = new HttpHeaders();
         headers.setAccept(singletonList(APPLICATION_JSON));
@@ -986,7 +1082,7 @@ public class ExternalOAuthAuthenticationManager extends ExternalLoginAuthenticat
                     .getClientAuthenticationParameters(params, config, allowDynamicValueLookupInCustomZone);
         } else if (ClientAuthentication.secretNeeded(calcAuthMethod)) {
             String auth = clientId + ":" + clientSecret;
-            headers.add("Authorization", "Basic " + Base64.encodeBase64String(auth.getBytes(StandardCharsets.UTF_8)));
+            headers.add("Authorization", "Basic " + Base64.getEncoder().encodeToString(auth.getBytes(StandardCharsets.UTF_8)));
         } else {
             params.add(AbstractClientParametersAuthenticationFilter.CLIENT_ID, clientId);
         }
