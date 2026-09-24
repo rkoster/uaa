@@ -94,6 +94,12 @@ stored CA configuration. The error description identifies the validation failure
 is consistent whether UAA identifies the client from the `client_id` parameter or from a Basic
 Authorization header with an empty secret. RFC 8705 clients must send the `client_id` parameter.
 
+Missing certificates return `tls_client_auth: client certificate required`. A certificate whose
+chain validates but fails `tls-client-auth-required-claims` returns
+`tls_client_auth: certificate does not satisfy required claims`, without expected or actual
+claim values. Both use HTTP `401` / `invalid_client`. Proxy trust/forwarding failures retain the
+generic `tls_client_auth: certificate validation failed` description.
+
 When `uaa.mtls-enabled` is `false`, `/oauth/mtls/token` and its descendant paths return HTTP
 `404` before client authentication or browser security runs. This includes GET and POST requests
 and zone-prefixed URLs such as `/z/{subdomain}/oauth/mtls/token` when zone paths are enabled.

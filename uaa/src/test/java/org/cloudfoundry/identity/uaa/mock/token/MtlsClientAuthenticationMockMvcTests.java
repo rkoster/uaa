@@ -313,6 +313,53 @@ class MtlsClientAuthenticationMockMvcTests extends AbstractTokenMockMvcTests {
         mockMvc.perform(request)
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error").value("invalid_client"))
+                .andExpect(jsonPath("$.error_description").value("tls_client_auth: client certificate required"));
+    }
+
+    @ParameterizedTest
+    @EnumSource(ClientIdentification.class)
+    void requiredClaimsFailureHasDistinctDescriptionWithoutClaimValues(ClientIdentification identification) throws Exception {
+        String clientId = "requiredclaims" + generator.generate();
+        setUpClients(clientId, "uaa.resource", "uaa.resource", GRANT_TYPE_CLIENT_CREDENTIALS,
+                false, null, null, -1, IdentityZone.getUaa(), Map.of(
+                        TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CA, caPem,
+                        TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CLAIM_MAPPINGS,
+                        List.of(new TlsClientAuthConfiguration.ClaimMapping("subject_cn", null, "app_id")),
+                        TlsClientAuthConfiguration.TLS_CLIENT_AUTH_REQUIRED_CLAIMS, Map.of("app_id", "other-workload")));
+        clientDetailsService.updateClientSecret(clientId, null);
+
+        mockMvc.perform(tokenRequest(clientId, identification, leaf))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("invalid_client"))
+                .andExpect(jsonPath("$.error_description").value("tls_client_auth: certificate does not satisfy required claims"))
+                .andExpect(jsonPath("$.access_token").doesNotExist());
+
+        // A trusted certificate becomes acceptable once its required claim matches.
+        UaaClientDetails client = (UaaClientDetails) clientDetailsService.loadClientByClientId(clientId);
+        Map<String, Object> info = new java.util.HashMap<>(client.getAdditionalInformation());
+        info.put(TlsClientAuthConfiguration.TLS_CLIENT_AUTH_REQUIRED_CLAIMS, Map.of("app_id", "test-workload"));
+        client.setAdditionalInformation(info);
+        clientDetailsService.updateClientDetails(client);
+        assertBoundToken(clientId, identification, leaf);
+
+        // An untrusted certificate must still fail chain validation, before the claim check.
+        mockMvc.perform(tokenRequest(clientId, identification, wrongCaLeaf))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error_description").value(
+                        "tls_client_auth: certificate chain validation failed: Path does not chain with any of the trust anchors"));
+    }
+
+    @Test
+    void proxyTrustFailureKeepsGenericCertificateError() throws Exception {
+        String clientId = "proxyfailure" + generator.generate();
+        setUpClients(clientId, "uaa.resource", "uaa.resource", GRANT_TYPE_CLIENT_CREDENTIALS,
+                false, null, null, -1, IdentityZone.getUaa(), Map.of(
+                        TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CA, caPem,
+                        TlsClientAuthConfiguration.TLS_CLIENT_AUTH_TRUSTED_PROXY_CA, caPem));
+        clientDetailsService.updateClientSecret(clientId, null);
+        // A certificate is present, but a proxy-only client requires trusted XFCC forwarding.
+        mockMvc.perform(tokenRequest(clientId, ClientIdentification.PARAMETER, leaf))
+                .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error_description").value("tls_client_auth: certificate validation failed"));
     }
 

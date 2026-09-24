@@ -206,7 +206,7 @@ public class ClientDetailsAuthenticationProvider extends DaoAuthenticationProvid
         // Cheap presence-only check (no config resolution, no JSON/claim-mapping parsing) before
         // doing any work to resolve this client's TlsClientAuthConfiguration.
         if (!tlsClientAuthentication.hasCertificateFromRequest()) {
-            return false;
+            throw new BadCredentialsException("tls_client_auth: client certificate required");
         }
         TlsClientAuthConfiguration config = getTlsClientAuthConfiguration(uaaClient);
         X509Certificate[] chain = tlsClientAuthentication.getCertificateChainFromRequest(config);
@@ -214,8 +214,13 @@ public class ClientDetailsAuthenticationProvider extends DaoAuthenticationProvid
             return false;
         }
         try {
-            return tlsClientAuthentication.validateClientCert(chain, config).isPresent()
-                    && tlsClientAuthentication.certificateSatisfiesRequiredClaims(chain[0], config);
+            if (tlsClientAuthentication.validateClientCert(chain, config).isEmpty()) {
+                return false;
+            }
+            if (!tlsClientAuthentication.certificateSatisfiesRequiredClaims(chain[0], config)) {
+                throw new BadCredentialsException("tls_client_auth: certificate does not satisfy required claims");
+            }
+            return true;
         } catch (InvalidClientDetailsException e) {
             // Basic authentication handles AuthenticationException, not OAuth2Exception.
             // Preserve the certificate failure while returning the same 401 as parameter authentication.

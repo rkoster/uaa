@@ -39,6 +39,8 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import org.springframework.security.authentication.BadCredentialsException;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -162,9 +164,9 @@ class ClientDetailsAuthenticationProviderTests {
                 mock(UserDetailsService.class), mock(PasswordEncoder.class),
                 mock(JwtClientAuthentication.class), tlsClientAuthentication);
 
-        boolean result = provider.validateTlsClientAuth(uaaClient);
-
-        assertThat(result).isFalse();
+        assertThatThrownBy(() -> provider.validateTlsClientAuth(uaaClient))
+                .isInstanceOf(BadCredentialsException.class)
+                .hasMessage("tls_client_auth: client certificate required");
         verify(uaaClient, never()).getAdditionalInformation();
         verify(tlsClientAuthentication, never()).getCertificateChainFromRequest(any());
     }
@@ -272,9 +274,10 @@ class ClientDetailsAuthenticationProviderTests {
             assertThat(provider.validateTlsClientAuth(unconstrainedClient))
                     .as("the unconstrained client (no tls-client-auth-required-claims) still accepts any cert from the shared CA")
                     .isTrue();
-            assertThat(provider.validateTlsClientAuth(constrainedClient))
+            assertThatThrownBy(() -> provider.validateTlsClientAuth(constrainedClient))
                     .as("the constrained client rejects a cert whose space_guid doesn't match its required claim")
-                    .isFalse();
+                    .isInstanceOf(BadCredentialsException.class)
+                    .hasMessage("tls_client_auth: certificate does not satisfy required claims");
         } finally {
             RequestContextHolder.resetRequestAttributes();
         }
