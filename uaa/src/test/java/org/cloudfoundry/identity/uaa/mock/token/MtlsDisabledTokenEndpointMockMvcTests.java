@@ -54,6 +54,15 @@ class MtlsDisabledTokenEndpointMockMvcTests extends AbstractTokenMockMvcTests {
     @Qualifier("mtlsEndpointAvailabilityFilter")
     FilterRegistrationBean<MtlsEndpointAvailabilityFilter> availabilityFilter;
 
+    @Autowired
+    @Qualifier("clientCertificateMapperFilter")
+    FilterRegistrationBean<?> mapperRegistration;
+
+    @Test
+    void certificateMapperIsNotRegisteredWhenMtlsDisabled() {
+        assertThat(mapperRegistration.isEnabled()).isFalse();
+    }
+
     @BeforeEach
     void includeAvailabilityFilter() {
         // MockMvc does not automatically install servlet FilterRegistrationBeans.

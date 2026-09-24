@@ -1254,6 +1254,8 @@ When `false` (the default), no client certificate is requested at the TLS layer 
 client configured with a `tls-client-auth-ca` property fails validation at creation/update time.
 The `/oauth/mtls/token` endpoint and its descendant paths return HTTP `404` before Spring
 Security, including GET/POST requests and zone-prefixed URLs when zone paths are enabled.
+The XFCC certificate mapper is not constructed or registered when this flag is `false`.
+When `true`, the mapper is required and failure to load it stops startup.
 
 The additional client metadata key `token-endpoint-auth-method` is accepted for compatibility
 but does not select authentication or affect this switch. Only `tls-client-auth-ca` selects

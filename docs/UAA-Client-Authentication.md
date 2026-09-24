@@ -92,6 +92,8 @@ Authorization header with an empty secret. RFC 8705 clients must send the `clien
 When `uaa.mtls-enabled` is `false`, `/oauth/mtls/token` and its descendant paths return HTTP
 `404` before client authentication or browser security runs. This includes GET and POST requests
 and zone-prefixed URLs such as `/z/{subdomain}/oauth/mtls/token` when zone paths are enabled.
+The XFCC certificate mapper is neither constructed nor registered while mTLS is disabled.
+Enabling mTLS requires the mapper dependency; failure to load it stops startup.
 
 #### Deployment topology
 

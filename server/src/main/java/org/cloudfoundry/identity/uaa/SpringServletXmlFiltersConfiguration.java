@@ -265,7 +265,14 @@ public class SpringServletXmlFiltersConfiguration {
     }
 
     @Bean
-    public FilterRegistrationBean<jakarta.servlet.Filter> clientCertificateMapperFilter() {
+    public FilterRegistrationBean<jakarta.servlet.Filter> clientCertificateMapperFilter(
+            @Value("${uaa.mtls-enabled:false}") boolean mtlsEnabled) {
+        if (!mtlsEnabled) {
+            FilterRegistrationBean<jakarta.servlet.Filter> bean = new FilterRegistrationBean<>(
+                    (request, response, chain) -> chain.doFilter(request, response));
+            bean.setEnabled(false);
+            return bean;
+        }
         // ClientCertificateMapper is a package-private final class in
         // org.cloudfoundry.router.jakarta; its constructor is also package-private.
         // The library is designed for Spring Boot autoconfiguration or Servlet container
