@@ -1249,6 +1249,10 @@ client configured with a `tls-client-auth-ca` property fails validation at creat
 The `/oauth/mtls/token` endpoint and its descendant paths return HTTP `404` before Spring
 Security, including GET/POST requests and zone-prefixed URLs when zone paths are enabled.
 
+The additional client metadata key `token-endpoint-auth-method` is accepted for compatibility
+but does not select authentication or affect this switch. Only `tls-client-auth-ca` selects
+mTLS for a client; setting that metadata key alone neither enables mTLS nor retires a secret.
+
 Per-client `tls-client-auth-claim-mappings` may only populate custom JWT roots. Configuration
 validation rejects reserved roots such as `amr`, `acr`, `client_auth_method`, `cnf`, `sub`, and
 `aud`, including dotted targets such as `acr.level`. Older stored mappings to reserved roots

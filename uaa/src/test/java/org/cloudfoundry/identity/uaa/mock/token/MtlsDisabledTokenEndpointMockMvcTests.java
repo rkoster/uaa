@@ -1,6 +1,7 @@
 package org.cloudfoundry.identity.uaa.mock.token;
 
 import org.cloudfoundry.identity.uaa.oauth.tls.MtlsEndpointAvailabilityFilter;
+import org.cloudfoundry.identity.uaa.util.JsonUtils;
 import org.cloudfoundry.identity.uaa.zone.ZonePathContextRewritingFilter;
 import org.cloudfoundry.identity.uaa.zone.ZoneContextPathSessionFilter;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,6 +18,8 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.Map;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.config.BeanIds.SPRING_SECURITY_FILTER_CHAIN;
@@ -26,6 +29,7 @@ import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -113,6 +117,30 @@ class MtlsDisabledTokenEndpointMockMvcTests extends AbstractTokenMockMvcTests {
     void loginPageStillWorksWhenMtlsDisabled() throws Exception {
         mockMvc.perform(get("/login").servletPath("/login"))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    void clientMetadataCanBeCreatedAndUpdatedWhenMtlsDisabled() throws Exception {
+        String clientId = "metadata" + generator.generate();
+        Map<String, Object> client = Map.of(
+                "client_id", clientId, "client_secret", SECRET,
+                "authorized_grant_types", List.of("client_credentials"),
+                "authorities", List.of("uaa.resource"), "scope", List.of("uaa.none"),
+                "token-endpoint-auth-method", "tls_client_auth");
+        mockMvc.perform(post("/oauth/clients").header(AUTHORIZATION, "Bearer " + adminToken)
+                        .contentType(APPLICATION_JSON).content(JsonUtils.writeValueAsString(client)))
+                .andExpect(status().isCreated());
+        mockMvc.perform(put("/oauth/clients/" + clientId).header(AUTHORIZATION, "Bearer " + adminToken)
+                        .contentType(APPLICATION_JSON).content(JsonUtils.writeValueAsString(client)))
+                .andExpect(status().isOk());
+        assertThat(clientDetailsService.loadClientByClientId(clientId).getAdditionalInformation())
+                .containsEntry("token-endpoint-auth-method", "tls_client_auth");
+        // Metadata claiming tls_client_auth does not select it or retire the client's secret.
+        mockMvc.perform(post("/oauth/token").servletPath("/oauth/token")
+                        .contentType(APPLICATION_FORM_URLENCODED)
+                        .param("client_id", clientId).param("client_secret", SECRET)
+                        .param("grant_type", "client_credentials"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.access_token").isNotEmpty());
     }
 
     private static String basicAdminCredentials() {

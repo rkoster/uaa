@@ -149,7 +149,10 @@ admin UI, alongside the client's other properties such as `authorized-grant-type
 The mTLS token endpoint is fixed at `/oauth/mtls/token`; it is not configurable. A client opts
 into mTLS by configuring a nonblank `tls-client-auth-ca`. The client must use that endpoint and
 present a certificate whose chain validates to the configured CA; no separate
-`token-endpoint-auth-method` property is used or supported.
+`token-endpoint-auth-method` property is used to select authentication. That key is accepted and
+stored as inert additional client metadata for compatibility, including when mTLS is disabled.
+Its value cannot enable mTLS, disable certificate requirements, or restore secret authentication
+for a client configured with `tls-client-auth-ca`.
 
 | Property | Required | Description |
 |----------|----------|--------------|

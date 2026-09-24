@@ -471,6 +471,13 @@ class ClientAdminEndpointsValidatorTests {
     }
 
     @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void acceptsInertTokenEndpointAuthMethodMetadata(boolean mtlsEnabled) {
+        assertThatNoException().isThrownBy(() -> ClientAdminEndpointsValidator.checkMtlsClientConfigAllowed(
+                Map.of("token-endpoint-auth-method", "tls_client_auth"), mtlsEnabled, "client-id"));
+    }
+
+    @ParameterizedTest
     @ValueSource(strings = {"amr", "acr", "auth_time", "client_auth_method", "cnf", "sub", "aud",
             "iss", "scope", "client_id", "zid", "amr.method", "acr.level", "auth_time.value",
             "client_auth_method.value", "cnf.x5t#S256", "sub.value", "aud.value", "scope.extra"})

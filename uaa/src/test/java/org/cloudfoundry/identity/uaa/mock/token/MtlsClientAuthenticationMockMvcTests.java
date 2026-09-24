@@ -52,6 +52,7 @@ import static org.springframework.http.MediaType.APPLICATION_FORM_URLENCODED;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.security.config.BeanIds.SPRING_SECURITY_FILTER_CHAIN;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -269,6 +270,45 @@ class MtlsClientAuthenticationMockMvcTests extends AbstractTokenMockMvcTests {
                 .andReturn().getResponse();
         assertThat(JsonUtils.readValueAsMap(response.getContentAsString()).get("error_description"))
                 .asString().contains("tls-client-auth-claim-mappings", "reserved", claim);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void tokenEndpointAuthMethodMetadataDoesNotSelectAuthentication(boolean configureCa) throws Exception {
+        String clientId = "metadata" + generator.generate();
+        Map<String, Object> client = new java.util.HashMap<>(Map.of(
+                "client_id", clientId, "client_secret", SECRET,
+                "authorized_grant_types", List.of(GRANT_TYPE_CLIENT_CREDENTIALS),
+                "scope", List.of("uaa.none"), "authorities", List.of("uaa.resource"),
+                "token-endpoint-auth-method", configureCa ? "client_secret_basic" : "tls_client_auth"));
+        if (configureCa) {
+            client.put(TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CA, caPem);
+        }
+        mockMvc.perform(post("/oauth/clients").header(AUTHORIZATION, "Bearer " + adminToken)
+                        .contentType(APPLICATION_JSON).content(JsonUtils.writeValueAsString(client)))
+                .andExpect(status().isCreated());
+        mockMvc.perform(put("/oauth/clients/" + clientId).header(AUTHORIZATION, "Bearer " + adminToken)
+                        .contentType(APPLICATION_JSON).content(JsonUtils.writeValueAsString(client)))
+                .andExpect(status().isOk());
+        assertThat(clientDetailsService.loadClientByClientId(clientId).getAdditionalInformation())
+                .containsEntry("token-endpoint-auth-method", client.get("token-endpoint-auth-method"));
+
+        var secretRequest = post("/oauth/token").servletPath("/oauth/token")
+                .contentType(APPLICATION_FORM_URLENCODED).header(AUTHORIZATION, basic(clientId, SECRET))
+                .param("grant_type", GRANT_TYPE_CLIENT_CREDENTIALS);
+        var certificateRequest = tokenRequest(clientId, ClientIdentification.PARAMETER, leaf);
+        if (configureCa) {
+            mockMvc.perform(secretRequest).andExpect(status().isUnauthorized())
+                    .andExpect(jsonPath("$.error").value("invalid_client"));
+            mockMvc.perform(certificateRequest).andExpect(status().isOk())
+                    .andExpect(jsonPath("$.access_token").isNotEmpty());
+        } else {
+            mockMvc.perform(secretRequest).andExpect(status().isOk())
+                    .andExpect(jsonPath("$.access_token").isNotEmpty());
+            mockMvc.perform(certificateRequest).andExpect(status().isUnauthorized())
+                    .andExpect(jsonPath("$.error_description").value(
+                            "tls_client_auth: /oauth/mtls/token requires a client configured with tls-client-auth-ca"));
+        }
     }
 
     @ParameterizedTest

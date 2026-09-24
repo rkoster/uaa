@@ -780,6 +780,16 @@ class ClientAdminBootstrapTests {
         assertThat(created.getAdditionalInformation()).doesNotContainKey(TlsClientAuthConfiguration.TLS_CLIENT_AUTH_TRUSTED_PROXY_CA);
     }
 
+    @Test
+    void tokenEndpointAuthMethodMetadataBootstrapsWhenMtlsDisabled() {
+        Map<String, Object> map = createClientMap("metadata-client");
+        map.put("token-endpoint-auth-method", "tls_client_auth");
+        ClientDetails created = doSimpleTest(map, clientAdminBootstrap, multitenantJdbcClientDetailsService, clients);
+        assertThat(created.getAdditionalInformation())
+                .containsEntry("token-endpoint-auth-method", "tls_client_auth")
+                .doesNotContainKey(TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CA);
+    }
+
     static ClientDetails doSimpleTest(
             final Map<String, Object> map,
             final ClientAdminBootstrap clientAdminBootstrap,
