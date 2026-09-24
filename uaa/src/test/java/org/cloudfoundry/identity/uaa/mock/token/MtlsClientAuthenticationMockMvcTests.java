@@ -22,6 +22,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -55,7 +56,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /** Regression coverage for PR #4076 C5: certificate failures must be OAuth authentication errors. */
-@TestPropertySource(properties = "uaa.mtls-enabled=true")
+@TestPropertySource(properties = {"uaa.mtls-enabled=true", "zones.paths.enabled=true"})
 class MtlsClientAuthenticationMockMvcTests extends AbstractTokenMockMvcTests {
     private static final String MTLS_PATH = "/oauth/mtls/token";
     private static final X500Name CA_SUBJECT = new X500Name("CN=Client authentication test CA");
@@ -178,6 +179,75 @@ class MtlsClientAuthenticationMockMvcTests extends AbstractTokenMockMvcTests {
                         .param("grant_type", GRANT_TYPE_CLIENT_CREDENTIALS))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.access_token").isNotEmpty());
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "BASIC, /oauth/mtls/token, false", "PARAMETER, /oauth/mtls/token, false",
+            "BASIC, /oauth/mtls/token, true", "PARAMETER, /oauth/mtls/token, true",
+            "BASIC, /z/default/oauth/mtls/token, false", "PARAMETER, /z/default/oauth/mtls/token, false",
+            "BASIC, /oauth/mtls/token/alias, false", "PARAMETER, /z/default/oauth/mtls/token/alias, false"
+    })
+    void ordinarySecretClientCannotAuthenticateAtMtlsEndpoint(ClientIdentification identification,
+            String path, boolean certificatePresent) throws Exception {
+        String clientId = "secretclient" + generator.generate();
+        setUpClients(clientId, "uaa.resource", "uaa.resource", GRANT_TYPE_CLIENT_CREDENTIALS,
+                false, null, null, -1, IdentityZone.getUaa(), Map.of());
+        var request = post(path).servletPath(path)
+                .accept(APPLICATION_JSON).contentType(APPLICATION_FORM_URLENCODED)
+                .param("grant_type", GRANT_TYPE_CLIENT_CREDENTIALS);
+        if (identification == ClientIdentification.BASIC) {
+            request.header(AUTHORIZATION, basic(clientId, SECRET));
+        } else {
+            request.param("client_id", clientId).param("client_secret", SECRET);
+        }
+        if (certificatePresent) {
+            request.requestAttr("jakarta.servlet.request.X509Certificate", new X509Certificate[]{leaf});
+        }
+
+        mockMvc.perform(request)
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("invalid_client"))
+                .andExpect(jsonPath("$.error_description").value(
+                        "tls_client_auth: /oauth/mtls/token requires a client configured with tls-client-auth-ca"))
+                .andExpect(jsonPath("$.access_token").doesNotExist());
+
+        // Prove the secret itself is valid and remains usable at the ordinary endpoint.
+        mockMvc.perform(post("/oauth/token").servletPath("/oauth/token")
+                        .header(AUTHORIZATION, basic(clientId, SECRET))
+                        .contentType(APPLICATION_FORM_URLENCODED)
+                        .param("grant_type", GRANT_TYPE_CLIENT_CREDENTIALS))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.access_token").isNotEmpty());
+    }
+
+    @ParameterizedTest
+    @EnumSource(ClientIdentification.class)
+    void mtlsClientWithoutCertificateStillFails(ClientIdentification identification) throws Exception {
+        var request = tokenRequest(createMtlsClient(caPem), identification, leaf)
+                .requestAttr("jakarta.servlet.request.X509Certificate", new X509Certificate[0]);
+
+        mockMvc.perform(request)
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("invalid_client"))
+                .andExpect(jsonPath("$.error_description").value("tls_client_auth: certificate validation failed"));
+    }
+
+    @Test
+    void trustedCertificateStillAuthenticatesThroughZonePath() throws Exception {
+        String clientId = createMtlsClient(caPem);
+        String path = "/z/default/oauth/mtls/token";
+        var response = mockMvc.perform(post(path).servletPath(path)
+                        .accept(APPLICATION_JSON).contentType(APPLICATION_FORM_URLENCODED)
+                        .param("client_id", clientId).param("grant_type", GRANT_TYPE_CLIENT_CREDENTIALS)
+                        .param("token_format", "jwt")
+                        .requestAttr("jakarta.servlet.request.X509Certificate", new X509Certificate[]{leaf}))
+                .andExpect(status().isOk()).andReturn().getResponse();
+        Map<String, Object> body = JsonUtils.readValueAsMap(response.getContentAsString());
+        Map<String, Object> claims = JsonUtils.readValueAsMap(
+                JwtHelper.decode((String) body.get("access_token")).getClaims());
+        assertThat(claims).containsEntry("client_id", clientId)
+                .containsEntry("client_auth_method", "tls_client_auth").containsKey("cnf");
     }
 
     @ParameterizedTest

@@ -61,6 +61,11 @@ for a client. This dedicated endpoint routing is what's scoped: only requests to
 `/oauth/mtls/token` attempt to authenticate the caller via a presented client certificate --
 requests to `/oauth/token` are never affected by this.
 
+The mTLS endpoint requires a client configured with `tls-client-auth-ca` and a valid client
+certificate. Ordinary clients receive HTTP `401` / `invalid_client` there even when they supply
+a valid secret or present a certificate. They must use `/oauth/token` for secret authentication.
+This restriction also applies to mTLS endpoint descendants and zone-prefixed URLs.
+
 The underlying TLS-layer change, however, is **connector-wide, not per-endpoint**: enabling
 this feature (`uaa.mtls-enabled`) reconfigures the whole embedded Tomcat connector to request a
 client certificate on *every* TLS handshake to this UAA instance (`certificateVerification=

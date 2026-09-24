@@ -558,7 +558,7 @@ class TokenEndpointDocs extends AbstractTokenMockMvcTests {
                 .requestAttr("jakarta.servlet.request.X509Certificate", new X509Certificate[]{leafCert});
 
         ParameterDescriptor mtlsClientIdParameter = parameterWithName(CLIENT_ID).required().type(STRING)
-                .description("Required. The client ID whose tls-client-auth-ca selects the certificate trust anchor for this mTLS token request. Certificate validation failures return HTTP 401 with OAuth error `invalid_client` and an error description identifying the validation failure. When uaa.mtls-enabled is false, the endpoint returns HTTP 404 before authentication, including zone-prefixed requests.");
+                .description("Required. The client ID whose tls-client-auth-ca selects the certificate trust anchor for this mTLS token request. Clients without mTLS configuration are rejected with HTTP 401 / `invalid_client`, even with a valid secret; secret authentication uses /oauth/token. Certificate validation failures return HTTP 401 with OAuth error `invalid_client` and an error description identifying the validation failure. When uaa.mtls-enabled is false, the endpoint returns HTTP 404 before authentication, including zone-prefixed requests.");
         assertThat(mtlsClientIdParameter.getAttributes()).containsEntry("constraints", SnippetUtils.REQUIRED);
 
         Snippet formParameters = formParameters(

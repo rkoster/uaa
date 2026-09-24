@@ -86,7 +86,14 @@ public class ClientDetailsAuthenticationProvider extends DaoAuthenticationProvid
         for (String pwd : passwordList) {
             try {
                 UaaClient uaaClient = new UaaClient(userDetails, pwd);
-                if (TlsClientAuthConfiguration.isConfigured(getTlsClientAuthConfiguration(uaaClient))) {
+                boolean tlsClientAuthConfigured =
+                        TlsClientAuthConfiguration.isConfigured(getTlsClientAuthConfiguration(uaaClient));
+                if (isTlsClientAuthPath(authentication.getDetails()) && !tlsClientAuthConfigured) {
+                    error = new BadCredentialsException(
+                            "tls_client_auth: /oauth/mtls/token requires a client configured with tls-client-auth-ca");
+                    break;
+                }
+                if (tlsClientAuthConfigured) {
                     if (!ObjectUtils.isEmpty(authentication.getCredentials())
                             || !isTlsClientAuthPath(authentication.getDetails())) {
                         error = new BadCredentialsException(
@@ -108,12 +115,6 @@ public class ClientDetailsAuthenticationProvider extends DaoAuthenticationProvid
                         setAuthenticationMethod(authentication, CLIENT_AUTH_PRIVATE_KEY_JWT);
                         if (!validatePrivateKeyJwt(authentication.getDetails(), uaaClient)) {
                             error = new BadCredentialsException("Bad client_assertion type");
-                        }
-                        break;
-                    } else if (isTlsClientAuthPath(authentication.getDetails())) {
-                        setAuthenticationMethod(authentication, CLIENT_AUTH_TLS_CLIENT_AUTH);
-                        if (!validateTlsClientAuth(uaaClient)) {
-                            error = new BadCredentialsException("tls_client_auth: certificate validation failed");
                         }
                         break;
                     } else {
