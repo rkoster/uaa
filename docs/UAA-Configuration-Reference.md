@@ -1268,6 +1268,12 @@ proxy certificates, then remove the old CA. Removing an anchor affects new authe
 not already-issued tokens. Supply intermediates in the presented chain unless independently
 trusting them as anchors is intentional.
 
+Application-level PKIX validation uses `setRevocationEnabled(false)` for both workload and
+proxy certificates. UAA does not consult CRLs or OCSP, including for long-lived custom-PKI
+certificates. Validity periods, chain signatures, and end-entity constraints are still checked.
+CA-published revocation alone does not block authentication; choose certificate lifetimes and
+renewal policies accordingly. Certificate trust changes do not revoke already-issued tokens.
+
 Per-client `tls-client-auth-claim-mappings` may only populate custom JWT roots. Configuration
 validation rejects reserved roots such as `amr`, `acr`, `client_auth_method`, `cnf`, `sub`, and
 `aud`, including dotted targets such as `acr.level`. Older stored mappings to reserved roots

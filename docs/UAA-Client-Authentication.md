@@ -180,6 +180,14 @@ certificates that require the removed anchor no longer authenticate. The client 
 bundles can rotate independently. Removing an anchor affects subsequent authentication; it
 does not revoke access tokens already issued.
 
+UAA's application-level PKIX validation disables certificate revocation checking: it does not
+consult CRLs or OCSP for either workload certificates or the immediate proxy's certificate.
+Certificate validity periods, chain signatures, and end-entity constraints are still checked.
+This also applies to long-lived certificates from custom PKIs; publishing a revocation at the
+issuing CA alone will not make UAA reject such a certificate. Use short-lived credentials and
+an appropriate renewal policy. Removing trust or disabling a client affects future token
+requests; already-issued access tokens require separate token revocation or expiration.
+
 | Property | Required | Description |
 |----------|----------|--------------|
 | `tls-client-auth-ca` | yes | PEM trust bundle containing one or more CA certificates. This is the per-client mTLS selector: requests to the fixed `/oauth/mtls/token` endpoint authenticate with a presented leaf certificate only when its chain validates against the configured trust set. |
