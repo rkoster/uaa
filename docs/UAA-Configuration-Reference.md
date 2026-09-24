@@ -1250,6 +1250,11 @@ zone-prefixed and descendant paths. Listing other authorized grant types on an m
 not enable them at this endpoint. User grants continue to use `/oauth/token` with an appropriately
 configured non-mTLS client.
 
+The mTLS endpoint is POST-only regardless of `allowQueryStringForTokens`. Authenticated GET
+requests return HTTP `405` with `Allow: POST`, including descendants and zone-prefixed paths.
+The regular token endpoint retains its configured GET behavior. POST query-string handling
+continues to follow the existing `allowQueryStringForTokens` setting.
+
 When `false` (the default), no client certificate is requested at the TLS layer at all, and any
 client configured with a `tls-client-auth-ca` property fails validation at creation/update time.
 The `/oauth/mtls/token` endpoint and its descendant paths return HTTP `404` before Spring

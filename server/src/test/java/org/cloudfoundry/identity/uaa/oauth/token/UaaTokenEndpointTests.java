@@ -125,8 +125,9 @@ class UaaTokenEndpointTests {
                 .isInstanceOf(InvalidGrantException.class)
                 .hasMessage("the mTLS token endpoint only issues client_credentials tokens");
         assertThatThrownBy(() -> endpoint.doDelegateGet(mock(Principal.class), parameters, request))
-                .isInstanceOf(InvalidGrantException.class)
-                .hasMessage("the mTLS token endpoint only issues client_credentials tokens");
+                .isInstanceOf(HttpRequestMethodNotSupportedException.class)
+                .satisfies(e -> assertThat(((HttpRequestMethodNotSupportedException) e).getSupportedMethods())
+                        .containsExactly("POST"));
         verify(endpoint, never()).getAccessToken(any(), any());
         verify(endpoint, never()).postAccessToken(any(), any());
     }
@@ -140,7 +141,8 @@ class UaaTokenEndpointTests {
         doReturn(mockResponseEntity).when(endpoint).postAccessToken(any(), any());
 
         assertThat(endpoint.doDelegatePost(mock(Principal.class), parameters, request)).isSameAs(mockResponseEntity);
-        assertThat(endpoint.doDelegateGet(mock(Principal.class), parameters, request)).isSameAs(mockResponseEntity);
+        assertThatThrownBy(() -> endpoint.doDelegateGet(mock(Principal.class), parameters, request))
+                .isInstanceOf(HttpRequestMethodNotSupportedException.class);
     }
 
     @ParameterizedTest

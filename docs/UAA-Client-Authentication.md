@@ -68,10 +68,15 @@ This restriction also applies to mTLS endpoint descendants and zone-prefixed URL
 
 The mTLS endpoint serves only the `client_credentials` grant for workload identity. Other or
 missing grant types return HTTP `400` with OAuth error `invalid_grant` after client authentication,
-for both GET and POST requests. Password, authorization-code, refresh-token, and extension grants
+for POST requests. Password, authorization-code, refresh-token, and extension grants
 are not served there, even if listed in the client's authorized grant types. This is UAA's workload
 endpoint policy, not a restriction imposed by RFC 8705. User flows continue to use `/oauth/token`
 with a client configured for an authentication method supported at that endpoint.
+
+The mTLS endpoint is POST-only, following RFC 6749 section 3.2. Authenticated GET requests return
+HTTP `405` with `Allow: POST`, including descendants and zone-prefixed paths. This applies even
+when `allowQueryStringForTokens` enables GET on the regular `/oauth/token` endpoint. The existing
+POST query-string policy is separate and remains controlled by that setting.
 
 The underlying TLS-layer change, however, is **connector-wide, not per-endpoint**: enabling
 this feature (`uaa.mtls-enabled`) reconfigures the whole embedded Tomcat connector to request a

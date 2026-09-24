@@ -59,6 +59,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 
 /** Regression coverage for PR #4076 C5: certificate failures must be OAuth authentication errors. */
 @TestPropertySource(properties = {"uaa.mtls-enabled=true", "zones.paths.enabled=true"})
@@ -333,6 +334,32 @@ class MtlsClientAuthenticationMockMvcTests extends AbstractTokenMockMvcTests {
     }
 
     @ParameterizedTest
+    @ValueSource(strings = {"/oauth/mtls/token", "/oauth/mtls/token/alias", "/z/default/oauth/mtls/token",
+            "/z/default/oauth/mtls/token/alias"})
+    void mtlsGetIsRejectedEvenWithValidCertificate(String path) throws Exception {
+        String clientId = createMtlsClient(caPem);
+        mockMvc.perform(request(HttpMethod.GET, path).servletPath(path)
+                        .accept(APPLICATION_JSON).contentType(APPLICATION_FORM_URLENCODED)
+                        .param("client_id", clientId).param("grant_type", GRANT_TYPE_CLIENT_CREDENTIALS)
+                        .requestAttr("jakarta.servlet.request.X509Certificate", new X509Certificate[]{leaf}))
+                .andExpect(status().isMethodNotAllowed())
+                .andExpect(header().string("Allow", "POST"))
+                .andExpect(jsonPath("$.access_token").doesNotExist());
+        assertBoundToken(clientId, ClientIdentification.PARAMETER, leaf);
+    }
+
+    @Test
+    void regularEndpointRetainsConfiguredGetSupport() throws Exception {
+        String clientId = "getclient" + generator.generate();
+        setUpClients(clientId, "uaa.resource", "uaa.resource", GRANT_TYPE_CLIENT_CREDENTIALS,
+                false, null, null, -1, IdentityZone.getUaa(), Map.of());
+        mockMvc.perform(request(HttpMethod.GET, "/oauth/token").servletPath("/oauth/token")
+                        .header(AUTHORIZATION, basic(clientId, SECRET))
+                        .queryParam("grant_type", GRANT_TYPE_CLIENT_CREDENTIALS))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.access_token").isNotEmpty());
+    }
+
+    @ParameterizedTest
     @ValueSource(strings = {"amr", "acr", "amr.method", "acr.level"})
     void clientAdminRejectsReservedClaimMappings(String claim) throws Exception {
         Map<String, Object> client = Map.of(
@@ -387,17 +414,21 @@ class MtlsClientAuthenticationMockMvcTests extends AbstractTokenMockMvcTests {
         clientDetailsService.updateClientDetails(client);
         clientDetailsService.updateClientSecret(clientId, null);
 
-        mockMvc.perform(request(HttpMethod.valueOf(method), path).servletPath(path)
+        var result = mockMvc.perform(request(HttpMethod.valueOf(method), path).servletPath(path)
                         .contentType(APPLICATION_FORM_URLENCODED).accept(APPLICATION_JSON)
                         .param("client_id", clientId).param("grant_type", grantType)
                         .param("username", username).param("password", SECRET).param("scope", "uaa.user")
                         .param("refresh_token", refreshToken).param("token_format", "jwt")
-                        .requestAttr("jakarta.servlet.request.X509Certificate", new X509Certificate[]{leaf}))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error").value("invalid_grant"))
-                .andExpect(jsonPath("$.error_description").value(
-                        "the mTLS token endpoint only issues client_credentials tokens"))
-                .andExpect(jsonPath("$.access_token").doesNotExist())
+                        .requestAttr("jakarta.servlet.request.X509Certificate", new X509Certificate[]{leaf}));
+        if (method.equals("GET")) {
+            result.andExpect(status().isMethodNotAllowed()).andExpect(header().string("Allow", "POST"));
+        } else {
+            result.andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error").value("invalid_grant"))
+                    .andExpect(jsonPath("$.error_description").value(
+                            "the mTLS token endpoint only issues client_credentials tokens"));
+        }
+        result.andExpect(jsonPath("$.access_token").doesNotExist())
                 .andExpect(jsonPath("$.refresh_token").doesNotExist());
     }
 

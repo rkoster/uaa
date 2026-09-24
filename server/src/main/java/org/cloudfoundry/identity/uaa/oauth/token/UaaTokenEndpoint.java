@@ -27,6 +27,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
@@ -66,7 +67,9 @@ public class UaaTokenEndpoint extends TokenEndpoint {
     public ResponseEntity<OAuth2AccessToken> doDelegateGet(Principal principal,
             @RequestParam Map<String, String> parameters,
             HttpServletRequest request) throws HttpRequestMethodNotSupportedException {
-        validateMtlsGrant(request, parameters);
+        if (RawPeerCertificateCaptureFilter.isMtlsTokenPath(request.getServletPath())) {
+            throw new HttpRequestMethodNotSupportedException("GET", List.of("POST"));
+        }
         return getAccessToken(principal, parameters);
     }
 
@@ -99,7 +102,12 @@ public class UaaTokenEndpoint extends TokenEndpoint {
     @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
     @Override
     public ResponseEntity<OAuth2Exception> handleHttpRequestMethodNotSupportedException(HttpRequestMethodNotSupportedException e) throws Exception {
-        return new HttpMethodNotSupportedAdvice().handleMethodNotSupportedException(e);
+        ResponseEntity<OAuth2Exception> response = new HttpMethodNotSupportedAdvice().handleMethodNotSupportedException(e);
+        if (response.getStatusCode().value() == 405 && e.getSupportedHttpMethods() != null) {
+            return ResponseEntity.status(response.getStatusCode()).headers(response.getHeaders())
+                    .allow(e.getSupportedHttpMethods().toArray(HttpMethod[]::new)).body(response.getBody());
+        }
+        return response;
     }
 
     @ExceptionHandler(Exception.class)

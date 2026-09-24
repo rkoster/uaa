@@ -563,7 +563,7 @@ class TokenEndpointDocs extends AbstractTokenMockMvcTests {
 
         Snippet formParameters = formParameters(
                 mtlsClientIdParameter,
-                grantTypeParameter.description("Must be `client_credentials`: this mTLS endpoint serves workload identity only. Other or missing grant types return HTTP 400 / `invalid_grant` after client authentication, including on GET and zone-prefixed requests."),
+                grantTypeParameter.description("Must be `client_credentials`: this mTLS endpoint serves workload identity only. Other or missing grant types on POST return HTTP 400 / `invalid_grant` after client authentication. The endpoint is POST-only; authenticated GET requests return HTTP 405 with Allow: POST, including on zone-prefixed paths."),
                 parameterWithName(REQUEST_TOKEN_FORMAT).optional("jwt").type(STRING)
                         .description("Set to `jwt` to receive a JSON Web Token containing the mTLS certificate-derived claims and RFC 8705 confirmation claim.")
         );
