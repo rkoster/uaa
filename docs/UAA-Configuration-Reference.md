@@ -1246,6 +1246,8 @@ does not implement server-side TLS 1.3 post-handshake client-certificate request
 
 When `false` (the default), no client certificate is requested at the TLS layer at all, and any
 client configured with a `tls-client-auth-ca` property fails validation at creation/update time.
+The `/oauth/mtls/token` endpoint and its descendant paths return HTTP `404` before Spring
+Security, including GET/POST requests and zone-prefixed URLs when zone paths are enabled.
 
 Per-client `tls-client-auth-claim-mappings` may only populate custom JWT roots. Configuration
 validation rejects reserved roots such as `amr`, `acr`, `client_auth_method`, `cnf`, `sub`, and

@@ -12,6 +12,7 @@ import org.bouncycastle.util.io.pem.PemWriter;
 import org.cloudfoundry.identity.uaa.client.TlsClientAuthConfiguration;
 import org.cloudfoundry.identity.uaa.oauth.jwt.JwtHelper;
 import org.cloudfoundry.identity.uaa.oauth.tls.RawPeerCertificateCaptureFilter;
+import org.cloudfoundry.identity.uaa.oauth.tls.MtlsEndpointAvailabilityFilter;
 import org.cloudfoundry.identity.uaa.util.JsonUtils;
 import org.cloudfoundry.identity.uaa.zone.IdentityZone;
 import org.cloudfoundry.identity.uaa.zone.ZoneContextPathSessionFilter;
@@ -75,6 +76,10 @@ class MtlsClientAuthenticationMockMvcTests extends AbstractTokenMockMvcTests {
     @Qualifier("rawPeerCertificateCaptureFilter")
     FilterRegistrationBean<RawPeerCertificateCaptureFilter> rawPeerFilter;
 
+    @Autowired
+    @Qualifier("mtlsEndpointAvailabilityFilter")
+    FilterRegistrationBean<MtlsEndpointAvailabilityFilter> availabilityFilter;
+
     private static X509Certificate ca;
     private static X509Certificate leaf;
     private static X509Certificate wrongCaLeaf;
@@ -110,6 +115,7 @@ class MtlsClientAuthenticationMockMvcTests extends AbstractTokenMockMvcTests {
                 .addFilter(zonePathFilter.getFilter())
                 .addFilter(zoneSessionFilter.getFilter())
                 .addFilter(rawPeerFilter.getFilter())
+                .addFilter(availabilityFilter.getFilter())
                 .addFilter(securityFilterChain)
                 .build();
     }

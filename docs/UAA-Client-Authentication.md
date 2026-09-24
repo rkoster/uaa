@@ -77,6 +77,10 @@ stored CA configuration. The error description identifies the validation failure
 is consistent whether UAA identifies the client from the `client_id` parameter or from a Basic
 Authorization header with an empty secret. RFC 8705 clients must send the `client_id` parameter.
 
+When `uaa.mtls-enabled` is `false`, `/oauth/mtls/token` and its descendant paths return HTTP
+`404` before client authentication or browser security runs. This includes GET and POST requests
+and zone-prefixed URLs such as `/z/{subdomain}/oauth/mtls/token` when zone paths are enabled.
+
 #### Deployment topology
 
 UAA itself only ever sees the certificate presented by its *immediate* TLS peer -- whatever

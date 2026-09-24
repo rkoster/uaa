@@ -6,6 +6,7 @@ import org.cloudfoundry.identity.uaa.metrics.UaaMetrics;
 import org.cloudfoundry.identity.uaa.metrics.UaaMetricsFilter;
 import org.cloudfoundry.identity.uaa.metrics.UaaMetricsManagedBean;
 import org.cloudfoundry.identity.uaa.oauth.DisableIdTokenResponseTypeFilter;
+import org.cloudfoundry.identity.uaa.oauth.tls.MtlsEndpointAvailabilityFilter;
 import org.cloudfoundry.identity.uaa.oauth.tls.MtlsPathGuardedFilter;
 import org.cloudfoundry.identity.uaa.oauth.tls.RawPeerCertificateCaptureFilter;
 import org.cloudfoundry.identity.uaa.provider.IdentityProviderProvisioning;
@@ -249,6 +250,17 @@ public class SpringServletXmlFiltersConfiguration {
         // TLS-handshake peer certificate before that filter overwrites the same standard
         // jakarta.servlet.request.X509Certificate attribute with the XFCC-header-derived certificate.
         bean.setOrder(-300);
+        return bean;
+    }
+
+    @Bean
+    public FilterRegistrationBean<MtlsEndpointAvailabilityFilter> mtlsEndpointAvailabilityFilter(
+            @Value("${uaa.mtls-enabled:false}") boolean mtlsEnabled) {
+        FilterRegistrationBean<MtlsEndpointAvailabilityFilter> bean =
+                new FilterRegistrationBean<>(new MtlsEndpointAvailabilityFilter(mtlsEnabled));
+        // All-request registration lets zone-path rewriting run before the effective path check.
+        // Run before the certificate mapper (-200) and Spring Security (-100).
+        bean.setOrder(-290);
         return bean;
     }
 
