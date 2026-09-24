@@ -377,7 +377,7 @@ public class ClientAdminEndpointsValidator implements InitializingBean, ClientDe
         }
         if (additionalInfo.containsKey(TlsClientAuthConfiguration.TLS_CLIENT_AUTH_TRUSTED_PROXY_CA)) {
             try {
-                PemCertificateParser.parseCertificate((String) additionalInfo.get(
+                PemCertificateParser.parseCertificateBundle((String) additionalInfo.get(
                         TlsClientAuthConfiguration.TLS_CLIENT_AUTH_TRUSTED_PROXY_CA));
             } catch (Exception e) {
                 throw new InvalidClientDetailsException(
@@ -390,7 +390,7 @@ public class ClientAdminEndpointsValidator implements InitializingBean, ClientDe
                         "Invalid tls-client-auth-ca for client_id=" + clientId + ": must be a PEM string.");
             }
             try {
-                PemCertificateParser.parseCertificate(getTlsClientAuthCaPem(additionalInfo));
+                PemCertificateParser.parseCertificateBundle(getTlsClientAuthCaPem(additionalInfo));
             } catch (Exception e) {
                 throw new InvalidClientDetailsException(
                         "Invalid tls-client-auth-ca for client_id=" + clientId + ": " + e.getMessage(), e);

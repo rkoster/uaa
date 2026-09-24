@@ -394,6 +394,39 @@ class TlsClientAuthenticationTest {
     }
 
     @Test
+    void trustedProxyCaRotationSupportsOverlapAndRemoval() throws Exception {
+        KeyPair rootKp = generateKeyPair();
+        X500Name rootName = new X500Name("CN=Trusted Proxy CA");
+        X509Certificate root = signCert(rootName, rootName, rootKp.getPublic(), rootKp.getPrivate(), true, BigInteger.ONE);
+        X509Certificate peer = signCert(new X500Name("CN=gorouter"), rootName,
+                generateKeyPair().getPublic(), rootKp.getPrivate(), false, BigInteger.TWO);
+        KeyPair newRootKp = generateKeyPair();
+        X509Certificate newRoot = signCert(rootName, rootName, newRootKp.getPublic(), newRootKp.getPrivate(), true, BigInteger.valueOf(3));
+        X509Certificate newPeer = signCert(new X500Name("CN=gorouter"), rootName,
+                generateKeyPair().getPublic(), newRootKp.getPrivate(), false, BigInteger.valueOf(4));
+        TlsClientAuthConfiguration config = new TlsClientAuthConfiguration("client-ca-pem", null);
+        config.setTrustedProxyCaPem(toPem(root));
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setAttribute(RawPeerCertificateCaptureFilter.RAW_PEER_CERTIFICATE_ATTRIBUTE, new X509Certificate[]{peer});
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+        try {
+            assertThat(service.isCertificateFromTrustedProxy(config)).isTrue();
+            config.setTrustedProxyCaPem(toPem(root) + toPem(newRoot));
+            assertThat(service.isCertificateFromTrustedProxy(config)).isTrue();
+            request.setAttribute(RawPeerCertificateCaptureFilter.RAW_PEER_CERTIFICATE_ATTRIBUTE, new X509Certificate[]{newPeer});
+            assertThat(service.isCertificateFromTrustedProxy(config)).isTrue();
+            config.setTrustedProxyCaPem(toPem(newRoot));
+            assertThat(service.isCertificateFromTrustedProxy(config)).isTrue();
+            request.setAttribute(RawPeerCertificateCaptureFilter.RAW_PEER_CERTIFICATE_ATTRIBUTE, new X509Certificate[]{peer});
+            assertThat(service.isCertificateFromTrustedProxy(config)).isFalse();
+            config.setTrustedProxyCaPem(toPem(root) + "-----BEGIN CERTIFICATE-----\ninvalid\n-----END CERTIFICATE-----");
+            assertThat(service.isCertificateFromTrustedProxy(config)).isFalse();
+        } finally {
+            RequestContextHolder.resetRequestAttributes();
+        }
+    }
+
+    @Test
     void isCertificateFromTrustedProxyFalseWhenPeerCertNotSignedByClientsTrustedProxyCa() throws Exception {
         KeyPair rootKp = generateKeyPair();
         X500Name rootName = new X500Name("CN=Trusted Proxy CA");

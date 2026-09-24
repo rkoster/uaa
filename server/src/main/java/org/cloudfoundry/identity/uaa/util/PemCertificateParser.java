@@ -34,6 +34,33 @@ public final class PemCertificateParser {
         }
     }
 
+    /** Reads every certificate in a trust bundle, failing the entire bundle on an invalid entry. */
+    public static List<X509Certificate> parseCertificateBundle(String pem) {
+        if (pem == null || pem.isBlank()) {
+            throw new IllegalArgumentException("CA certificate must not be null or blank.");
+        }
+        try (PEMParser parser = new PEMParser(new java.io.StringReader(pem))) {
+            List<X509Certificate> certificates = new ArrayList<>();
+            JcaX509CertificateConverter converter = new JcaX509CertificateConverter()
+                    .setProvider(BouncyCastleFipsProvider.PROVIDER_NAME);
+            Object object;
+            while ((object = parser.readObject()) != null) {
+                if (!(object instanceof X509CertificateHolder holder)) {
+                    throw new IllegalArgumentException("PEM object is not a certificate: " + object.getClass().getSimpleName());
+                }
+                certificates.add(converter.getCertificate(holder));
+            }
+            if (certificates.isEmpty()) {
+                throw new IllegalArgumentException("No PEM object found in tls-client-auth-ca");
+            }
+            return List.copyOf(certificates);
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Unable to parse CA certificate bundle: " + e.getMessage(), e);
+        }
+    }
+
     public static List<X509Certificate> parseCertificates(List<String> pemEncodedCertificates) {
         if (pemEncodedCertificates == null || pemEncodedCertificates.isEmpty()) {
             return List.of();

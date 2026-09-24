@@ -61,6 +61,10 @@ class ClientAdminEndpointDocs extends AdminClientCreator {
             fieldWithPath("authorities").optional("uaa.none").type(ARRAY).description("Scopes which the client is able to grant when creating a client"),
             fieldWithPath("autoapprove").optional(Collections.emptySet()).type(Arrays.asList(BOOLEAN, ARRAY)).description("Scopes that do not require user approval"),
             fieldWithPath("allowpublic").optional(false).type(BOOLEAN).description("If true, allow to omit client_secret for authorization_code flow in combination with PKCE"),
+            fieldWithPath("tls-client-auth-ca").optional(null).type(STRING)
+                    .description("PEM trust bundle selecting inbound mTLS authentication. Accepts one or more concatenated CA certificates, each trusted as a PKIX anchor. For rotation, trust old and new CAs during certificate renewal, then remove the old. Malformed bundle entries are rejected with HTTP 400."),
+            fieldWithPath("tls-client-auth-trusted-proxy-ca").optional(null).type(STRING)
+                    .description("PEM trust bundle for the immediate TLS proxy, supporting old/new CA overlap during rotation. Each certificate is a trust anchor; malformed entries are rejected with HTTP 400. When configured, the client requires a trusted proxy and XFCC forwarding."),
             fieldWithPath("token-endpoint-auth-method").optional(null).type(STRING)
                     .description("Accepted as inert additional client metadata for compatibility, including when mTLS is disabled. Does not select authentication: tls-client-auth-ca is the sole inbound mTLS selector."),
             fieldWithPath("tls-client-auth-sub-template").optional(null).type(STRING)

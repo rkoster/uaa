@@ -167,10 +167,23 @@ Authentication and token enhancement use the same parser for the flat `tls-clien
 metadata. Claim mappings, audience templates, and required claims can be native arrays/maps
 or JSON-encoded strings; both forms are interpreted identically. The CA remains a PEM string.
 
+Each of `tls-client-auth-ca` and `tls-client-auth-trusted-proxy-ca` accepts one or more
+concatenated PEM certificates. Every certificate in the bundle is an explicitly trusted PKIX
+anchor; this is a trust set, not a supplied chain. Malformed or non-certificate PEM entries
+reject the entire bundle during configuration and authentication. Supply intermediates in the
+presented chain unless you intend to trust them independently as anchors.
+
+For CA rotation, first configure a bundle containing both the old and new CA certificates.
+Switch certificate issuance to the new CA, allow workloads to renew, then remove the old CA
+from the bundle. Certificates under either CA authenticate during overlap; after removal,
+certificates that require the removed anchor no longer authenticate. The client and proxy CA
+bundles can rotate independently. Removing an anchor affects subsequent authentication; it
+does not revoke access tokens already issued.
+
 | Property | Required | Description |
 |----------|----------|--------------|
-| `tls-client-auth-ca` | yes | PEM-encoded CA certificate. This is the per-client mTLS selector: requests to the fixed `/oauth/mtls/token` endpoint authenticate with a presented leaf certificate only when it chains to this CA. |
-| `tls-client-auth-trusted-proxy-ca` | conditional | PEM-encoded CA certificate the Gorouter's own backend mTLS certificate must chain to. Configuring this switches the client to the Gorouter/XFCC-forwarding-only topology (requiring the `X-Forwarded-Client-Cert` header) -- see "Deployment topology" above. Leave unset for a direct-connection-only client. |
+| `tls-client-auth-ca` | yes | PEM trust bundle containing one or more CA certificates. This is the per-client mTLS selector: requests to the fixed `/oauth/mtls/token` endpoint authenticate with a presented leaf certificate only when its chain validates against the configured trust set. |
+| `tls-client-auth-trusted-proxy-ca` | conditional | PEM trust bundle for the Gorouter's own backend mTLS certificate. Configuring this switches the client to the Gorouter/XFCC-forwarding-only topology (requiring the `X-Forwarded-Client-Cert` header) -- see "Deployment topology" above. Leave unset for a direct-connection-only client. |
 | `tls-client-auth-required-claims` | no | Map of `claimName -> requiredValue`, checked against the values already produced by `tls-client-auth-claim-mappings`. When configured, authentication fails unless every entry matches exactly -- e.g. `{space_guid: "<specific-space-guid>"}` scopes this client to a single CF space, even if other clients share the same `tls-client-auth-ca`. |
 | `tls-client-auth-claim-mappings` | no | List of `{field, pattern, claim}` mappings from certificate subject fields (`subject_cn`, `subject_ou`, `subject_o`) to JWT claim names. `subject_cn` and `subject_o` map their values directly; `pattern` is supported only for `subject_ou`, where it extracts a capture group. Patterns are UAA administrator-controlled configuration and are evaluated on every mTLS authentication request; use efficient Java regular expressions and avoid patterns with catastrophic backtracking. |
 | `tls-client-auth-sub-template` | no | Template string rendered using mapped certificate values to produce `sub`. A nonblank template must contain at least one declared `{claim}` placeholder. Blank means no override. |

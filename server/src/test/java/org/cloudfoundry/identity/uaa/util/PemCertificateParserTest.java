@@ -65,6 +65,37 @@ class PemCertificateParserTest {
     }
 
     @Test
+    void bundleAllowsSurroundingWhitespace() {
+        assertThat(PemCertificateParser.parseCertificateBundle("\n  \n" + VALID_CERT + "\n\t"))
+                .containsExactly(PemCertificateParser.parseCertificate(VALID_CERT));
+    }
+
+    @Test
+    void bundleReadsEveryCertificate() {
+        assertThat(PemCertificateParser.parseCertificateBundle(VALID_CERT + VALID_CERT))
+                .containsExactly(PemCertificateParser.parseCertificate(VALID_CERT), PemCertificateParser.parseCertificate(VALID_CERT));
+    }
+
+    @Test
+    void bundleRejectsMalformedSecondObject() {
+        assertThatThrownBy(() -> PemCertificateParser.parseCertificateBundle(VALID_CERT + MALFORMED_CERT))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @ParameterizedTest
+    @NullAndEmptySource
+    @ValueSource(strings = {"  ", "not a certificate", "-----BEGIN PRIVATE KEY-----\ninvalid\n-----END PRIVATE KEY-----"})
+    void bundleRequiresCertificates(String pem) {
+        assertThatThrownBy(() -> PemCertificateParser.parseCertificateBundle(pem)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void existingParserStillReturnsFirstCertificate() {
+        assertThat(PemCertificateParser.parseCertificate(VALID_CERT + VALID_CERT))
+                .isEqualTo(PemCertificateParser.parseCertificate(VALID_CERT));
+    }
+
+    @Test
     void parseCertificate_malformedPem_throwsIllegalArgumentException() {
         assertThatThrownBy(() -> PemCertificateParser.parseCertificate(MALFORMED_CERT))
                 .isInstanceOf(IllegalArgumentException.class);

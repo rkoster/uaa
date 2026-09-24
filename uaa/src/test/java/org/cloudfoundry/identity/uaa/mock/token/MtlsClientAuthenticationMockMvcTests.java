@@ -91,6 +91,8 @@ class MtlsClientAuthenticationMockMvcTests extends AbstractTokenMockMvcTests {
     private static X509Certificate wrongCaLeaf;
     private static X509Certificate expiredLeaf;
     private static String caPem;
+    private static String newCaPem;
+    private static X509Certificate newLeaf;
 
     enum ClientIdentification { PARAMETER, BASIC }
 
@@ -107,11 +109,19 @@ class MtlsClientAuthenticationMockMvcTests extends AbstractTokenMockMvcTests {
         expiredLeaf = signCertificate(leafSubject, CA_SUBJECT, leafKey, caKey, false, 3, -60_000);
         wrongCaLeaf = signCertificate(leafSubject, new X500Name("CN=Untrusted CA"),
                 leafKey, generateKeyPair(), false, 4, 3_600_000);
+        caPem = toPem(ca);
+        KeyPair newCaKey = generateKeyPair();
+        // Reusing a CA subject during key rotation must also work.
+        newCaPem = toPem(signCertificate(CA_SUBJECT, CA_SUBJECT, newCaKey, newCaKey, true, 5, 3_600_000));
+        newLeaf = signCertificate(leafSubject, CA_SUBJECT, leafKey, newCaKey, false, 6, 3_600_000);
+    }
+
+    private static String toPem(X509Certificate certificate) throws Exception {
         StringWriter writer = new StringWriter();
         try (PemWriter pemWriter = new PemWriter(writer)) {
-            pemWriter.writeObject(new PemObject("CERTIFICATE", ca.getEncoded()));
+            pemWriter.writeObject(new PemObject("CERTIFICATE", certificate.getEncoded()));
         }
-        caPem = writer.toString();
+        return writer.toString();
     }
 
     @BeforeEach
@@ -153,6 +163,73 @@ class MtlsClientAuthenticationMockMvcTests extends AbstractTokenMockMvcTests {
         // Direct storage models legacy configuration that bypassed client-admin validation.
         assertCertificateRejected(identification, "not-a-certificate", leaf,
                 "tls_client_auth: CA configuration error: No PEM object found in tls-client-auth-ca");
+    }
+
+    @ParameterizedTest
+    @EnumSource(ClientIdentification.class)
+    void caRotationAcceptsOverlapAndRejectsRemovedAnchor(ClientIdentification identification) throws Exception {
+        String clientId = createMtlsClient(caPem);
+        mockMvc.perform(tokenRequest(clientId, identification, leaf)).andExpect(status().isOk());
+        mockMvc.perform(tokenRequest(clientId, identification, newLeaf)).andExpect(status().isUnauthorized());
+
+        updateTrustBundle(clientId, caPem + newCaPem);
+        assertBoundToken(clientId, identification, leaf);
+        assertBoundToken(clientId, identification, newLeaf);
+        mockMvc.perform(tokenRequest(clientId, identification, wrongCaLeaf))
+                .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.error").value("invalid_client"));
+
+        updateTrustBundle(clientId, newCaPem);
+        mockMvc.perform(tokenRequest(clientId, identification, leaf))
+                .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.error").value("invalid_client"));
+        assertBoundToken(clientId, identification, newLeaf);
+    }
+
+    private void updateTrustBundle(String clientId, String bundle) throws Exception {
+        Map<String, Object> client = Map.of("client_id", clientId,
+                "authorized_grant_types", List.of(GRANT_TYPE_CLIENT_CREDENTIALS),
+                "scope", List.of("uaa.none"), "authorities", List.of("uaa.resource"),
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CA, bundle);
+        mockMvc.perform(put("/oauth/clients/" + clientId).header(AUTHORIZATION, "Bearer " + adminToken)
+                        .contentType(APPLICATION_JSON).content(JsonUtils.writeValueAsString(client)))
+                .andExpect(status().isOk());
+    }
+
+    private void assertBoundToken(String clientId, ClientIdentification identification, X509Certificate certificate)
+            throws Exception {
+        var response = mockMvc.perform(tokenRequest(clientId, identification, certificate))
+                .andExpect(status().isOk()).andReturn().getResponse();
+        var token = JwtHelper.decode((String) JsonUtils.readValueAsMap(response.getContentAsString()).get("access_token"));
+        token.verifySignature(keyInfoService.getKey(token.getHeader().getKid()).getVerifier());
+        String thumbprint = Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(MessageDigest.getInstance("SHA-256").digest(certificate.getEncoded()));
+        assertThat(JsonUtils.readValueAsMap(token.getClaims()))
+                .containsEntry("client_id", clientId).containsEntry("cnf", Map.of("x5t#S256", thumbprint));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"tls-client-auth-ca", "tls-client-auth-trusted-proxy-ca"})
+    void clientAdminAcceptsTrustBundle(String property) throws Exception {
+        Map<String, Object> client = new java.util.HashMap<>(Map.of(
+                "client_id", "bundle" + generator.generate(),
+                "authorized_grant_types", List.of(GRANT_TYPE_CLIENT_CREDENTIALS),
+                "scope", List.of("uaa.none"), "authorities", List.of("uaa.resource"),
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CA, caPem));
+        client.put(property, caPem + newCaPem);
+        mockMvc.perform(post("/oauth/clients").header(AUTHORIZATION, "Bearer " + adminToken)
+                        .accept(APPLICATION_JSON).contentType(APPLICATION_JSON)
+                        .content(JsonUtils.writeValueAsString(client)))
+                .andExpect(status().isCreated());
+        assertThat(clientDetailsService.loadClientByClientId((String) client.get("client_id")).getAdditionalInformation())
+                .containsEntry(property, caPem + newCaPem);
+    }
+
+    @ParameterizedTest
+    @EnumSource(ClientIdentification.class)
+    void malformedSecondCertificateRejectsWholeTrustBundle(ClientIdentification identification) throws Exception {
+        String bundle = caPem + "-----BEGIN CERTIFICATE-----\ninvalid\n-----END CERTIFICATE-----\n";
+        mockMvc.perform(tokenRequest(createMtlsClient(bundle), identification, leaf))
+                .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.error").value("invalid_client"))
+                .andExpect(jsonPath("$.access_token").doesNotExist());
     }
 
     @ParameterizedTest

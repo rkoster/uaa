@@ -478,6 +478,22 @@ class ClientAdminEndpointsValidatorTests {
     }
 
     @ParameterizedTest
+    @ValueSource(strings = {"tls-client-auth-ca", "tls-client-auth-trusted-proxy-ca"})
+    void acceptsBundledMtlsTrustAnchors(String property) {
+        assertThatNoException().isThrownBy(() -> ClientAdminEndpointsValidator.checkMtlsClientConfigAllowed(
+                Map.of(property, VALID_CERT + VALID_CERT), true, "client-id"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"tls-client-auth-ca", "tls-client-auth-trusted-proxy-ca"})
+    void rejectsMalformedSecondTrustAnchor(String property) {
+        assertThatThrownBy(() -> ClientAdminEndpointsValidator.checkMtlsClientConfigAllowed(
+                Map.of(property, VALID_CERT + "-----BEGIN CERTIFICATE-----\ninvalid\n-----END CERTIFICATE-----"), true, "client-id"))
+                .isInstanceOf(InvalidClientDetailsException.class)
+                .hasMessageContainingAll(property, "client-id");
+    }
+
+    @ParameterizedTest
     @ValueSource(strings = {"amr", "acr", "auth_time", "client_auth_method", "cnf", "sub", "aud",
             "iss", "scope", "client_id", "zid", "amr.method", "acr.level", "auth_time.value",
             "client_auth_method.value", "cnf.x5t#S256", "sub.value", "aud.value", "scope.extra"})

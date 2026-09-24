@@ -1261,6 +1261,13 @@ The additional client metadata key `token-endpoint-auth-method` is accepted for 
 but does not select authentication or affect this switch. Only `tls-client-auth-ca` selects
 mTLS for a client; setting that metadata key alone neither enables mTLS nor retires a secret.
 
+The `tls-client-auth-ca` and `tls-client-auth-trusted-proxy-ca` values accept concatenated PEM
+CA certificates. Every entry is trusted as a PKIX anchor. Invalid PEM entries reject the entire
+bundle. To rotate a CA, add the new CA alongside the old, renew the corresponding workload or
+proxy certificates, then remove the old CA. Removing an anchor affects new authentication,
+not already-issued tokens. Supply intermediates in the presented chain unless independently
+trusting them as anchors is intentional.
+
 Per-client `tls-client-auth-claim-mappings` may only populate custom JWT roots. Configuration
 validation rejects reserved roots such as `amr`, `acr`, `client_auth_method`, `cnf`, `sub`, and
 `aud`, including dotted targets such as `acr.level`. Older stored mappings to reserved roots
