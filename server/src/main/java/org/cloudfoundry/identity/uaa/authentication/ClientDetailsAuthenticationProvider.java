@@ -13,6 +13,7 @@
  *******************************************************************************/
 package org.cloudfoundry.identity.uaa.authentication;
 
+import org.cloudfoundry.identity.uaa.client.InvalidClientDetailsException;
 import org.cloudfoundry.identity.uaa.client.TlsClientAuthConfiguration;
 import org.cloudfoundry.identity.uaa.client.UaaClient;
 import org.cloudfoundry.identity.uaa.util.JsonUtils;
@@ -214,8 +215,14 @@ public class ClientDetailsAuthenticationProvider extends DaoAuthenticationProvid
         if (chain == null || chain.length == 0) {
             return false;
         }
-        return tlsClientAuthentication.validateClientCert(chain, config).isPresent()
-                && tlsClientAuthentication.certificateSatisfiesRequiredClaims(chain[0], config);
+        try {
+            return tlsClientAuthentication.validateClientCert(chain, config).isPresent()
+                    && tlsClientAuthentication.certificateSatisfiesRequiredClaims(chain[0], config);
+        } catch (InvalidClientDetailsException e) {
+            // Basic authentication handles AuthenticationException, not OAuth2Exception.
+            // Preserve the certificate failure while returning the same 401 as parameter authentication.
+            throw new BadCredentialsException(e.getMessage(), e);
+        }
     }
 
     static TlsClientAuthConfiguration getTlsClientAuthConfiguration(UaaClient uaaClient) {

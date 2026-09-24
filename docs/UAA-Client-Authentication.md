@@ -71,6 +71,12 @@ simply respond with an empty `Certificate` message if they have no certificate m
 connector's advertised acceptable-issuer list, so this doesn't outright break other endpoints,
 but it is a deployment-wide TLS-layer change, not one isolated to `/oauth/mtls/token`.
 
+Certificate validation failures return HTTP `401` with OAuth error `invalid_client`, including
+untrusted or expired certificates, a CA certificate presented as the client leaf, and malformed
+stored CA configuration. The error description identifies the validation failure. This response
+is consistent whether UAA identifies the client from the `client_id` parameter or from a Basic
+Authorization header with an empty secret. RFC 8705 clients must send the `client_id` parameter.
+
 #### Deployment topology
 
 UAA itself only ever sees the certificate presented by its *immediate* TLS peer -- whatever
