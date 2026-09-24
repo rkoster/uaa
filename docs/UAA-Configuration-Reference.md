@@ -1244,6 +1244,12 @@ the per-client `tls-client-auth-*` properties). Enabling this also switches the 
 FIPS BouncyCastle JSSE provider, required for TLS 1.3 client-certificate support (OpenJDK's JSSE
 does not implement server-side TLS 1.3 post-handshake client-certificate requests).
 
+The dedicated mTLS endpoint serves only `client_credentials` for workload identity. After client
+authentication, other or missing grant types return HTTP `400` / `invalid_grant`, including on
+zone-prefixed and descendant paths. Listing other authorized grant types on an mTLS client does
+not enable them at this endpoint. User grants continue to use `/oauth/token` with an appropriately
+configured non-mTLS client.
+
 When `false` (the default), no client certificate is requested at the TLS layer at all, and any
 client configured with a `tls-client-auth-ca` property fails validation at creation/update time.
 The `/oauth/mtls/token` endpoint and its descendant paths return HTTP `404` before Spring

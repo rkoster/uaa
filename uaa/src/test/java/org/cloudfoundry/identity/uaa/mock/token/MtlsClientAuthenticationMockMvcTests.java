@@ -10,6 +10,8 @@ import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
 import org.bouncycastle.util.io.pem.PemObject;
 import org.bouncycastle.util.io.pem.PemWriter;
 import org.cloudfoundry.identity.uaa.client.TlsClientAuthConfiguration;
+import org.cloudfoundry.identity.uaa.client.UaaClientDetails;
+import org.cloudfoundry.identity.uaa.constants.OriginKeys;
 import org.cloudfoundry.identity.uaa.oauth.jwt.JwtHelper;
 import org.cloudfoundry.identity.uaa.oauth.tls.RawPeerCertificateCaptureFilter;
 import org.cloudfoundry.identity.uaa.oauth.tls.MtlsEndpointAvailabilityFilter;
@@ -26,6 +28,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.http.HttpMethod;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.security.web.FilterChainProxy;
 import org.springframework.test.context.TestPropertySource;
@@ -53,6 +56,7 @@ import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.security.config.BeanIds.SPRING_SECURITY_FILTER_CHAIN;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -270,6 +274,54 @@ class MtlsClientAuthenticationMockMvcTests extends AbstractTokenMockMvcTests {
                 .andReturn().getResponse();
         assertThat(JsonUtils.readValueAsMap(response.getContentAsString()).get("error_description"))
                 .asString().contains("tls-client-auth-claim-mappings", "reserved", claim);
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "POST, /oauth/mtls/token, password", "GET, /oauth/mtls/token, password",
+            "POST, /z/default/oauth/mtls/token, password", "GET, /z/default/oauth/mtls/token, password",
+            "POST, /oauth/mtls/token, refresh_token", "GET, /oauth/mtls/token, refresh_token",
+            "POST, /z/default/oauth/mtls/token, refresh_token", "GET, /z/default/oauth/mtls/token, refresh_token"
+    })
+    void mtlsEndpointRejectsUserGrants(String method, String path, String grantType) throws Exception {
+        String username = "mtlsuser" + generator.generate();
+        setUpUser(jdbcScimUserProvisioning, jdbcScimGroupMembershipManager, jdbcScimGroupProvisioning,
+                username, "uaa.user", OriginKeys.UAA, IdentityZone.getUaaZoneId());
+        String clientId = "usergrants" + generator.generate();
+        setUpClients(clientId, "uaa.resource", "uaa.user", "client_credentials,password,refresh_token",
+                false, null, null, -1, IdentityZone.getUaa(), Map.of());
+
+        // Establish valid user credentials, scopes and a real refresh token using the ordinary endpoint.
+        var originalResponse = mockMvc.perform(post("/oauth/token").servletPath("/oauth/token")
+                        .header(AUTHORIZATION, basic(clientId, SECRET))
+                        .contentType(APPLICATION_FORM_URLENCODED)
+                        .param("grant_type", "password").param("username", username).param("password", SECRET)
+                        .param("scope", "uaa.user"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.refresh_token").isNotEmpty())
+                .andReturn().getResponse();
+        String refreshToken = (String) JsonUtils.readValueAsMap(originalResponse.getContentAsString()).get("refresh_token");
+        mockMvc.perform(post("/oauth/token").servletPath("/oauth/token")
+                        .header(AUTHORIZATION, basic(clientId, SECRET)).contentType(APPLICATION_FORM_URLENCODED)
+                        .param("grant_type", "refresh_token").param("refresh_token", refreshToken))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.access_token").isNotEmpty());
+
+        UaaClientDetails client = (UaaClientDetails) clientDetailsService.loadClientByClientId(clientId);
+        client.setTlsClientAuthConfiguration(new TlsClientAuthConfiguration(caPem, null));
+        clientDetailsService.updateClientDetails(client);
+        clientDetailsService.updateClientSecret(clientId, null);
+
+        mockMvc.perform(request(HttpMethod.valueOf(method), path).servletPath(path)
+                        .contentType(APPLICATION_FORM_URLENCODED).accept(APPLICATION_JSON)
+                        .param("client_id", clientId).param("grant_type", grantType)
+                        .param("username", username).param("password", SECRET).param("scope", "uaa.user")
+                        .param("refresh_token", refreshToken).param("token_format", "jwt")
+                        .requestAttr("jakarta.servlet.request.X509Certificate", new X509Certificate[]{leaf}))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("invalid_grant"))
+                .andExpect(jsonPath("$.error_description").value(
+                        "the mTLS token endpoint only issues client_credentials tokens"))
+                .andExpect(jsonPath("$.access_token").doesNotExist())
+                .andExpect(jsonPath("$.refresh_token").doesNotExist());
     }
 
     @ParameterizedTest

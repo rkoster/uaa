@@ -2,6 +2,8 @@ package org.cloudfoundry.identity.uaa.oauth.token;
 
 import org.cloudfoundry.identity.uaa.oauth.advice.HttpMethodNotSupportedAdvice;
 import org.cloudfoundry.identity.uaa.oauth.common.OAuth2AccessToken;
+import org.cloudfoundry.identity.uaa.oauth.common.exceptions.InvalidGrantException;
+import org.cloudfoundry.identity.uaa.oauth.tls.RawPeerCertificateCaptureFilter;
 import org.cloudfoundry.identity.uaa.oauth.provider.OAuth2RequestFactory;
 import org.cloudfoundry.identity.uaa.oauth.provider.OAuth2RequestValidator;
 import org.cloudfoundry.identity.uaa.oauth.provider.TokenGranter;
@@ -29,6 +31,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import static org.springframework.util.StringUtils.hasText;
+import static org.cloudfoundry.identity.uaa.oauth.token.TokenConstants.GRANT_TYPE_CLIENT_CREDENTIALS;
 
 @Controller
 @RequestMapping(value = {"/oauth/token", "/oauth/mtls/token"}) //used simply because TokenEndpoint wont match /oauth/token/alias/saml-entity-id
@@ -61,7 +64,9 @@ public class UaaTokenEndpoint extends TokenEndpoint {
 
     @GetMapping("**")
     public ResponseEntity<OAuth2AccessToken> doDelegateGet(Principal principal,
-            @RequestParam Map<String, String> parameters) throws HttpRequestMethodNotSupportedException {
+            @RequestParam Map<String, String> parameters,
+            HttpServletRequest request) throws HttpRequestMethodNotSupportedException {
+        validateMtlsGrant(request, parameters);
         return getAccessToken(principal, parameters);
     }
 
@@ -73,7 +78,17 @@ public class UaaTokenEndpoint extends TokenEndpoint {
             logger.debug("Call to /oauth/token contains a query string. Aborting.");
             throw new HttpRequestMethodNotSupportedException("POST");
         }
+        validateMtlsGrant(request, parameters);
         return postAccessToken(principal, parameters);
+    }
+
+    // This endpoint serves workload identity only. RFC 8705 itself also permits user grants,
+    // but those require separate handling of workload templates and resource-owner identity.
+    private static void validateMtlsGrant(HttpServletRequest request, Map<String, String> parameters) {
+        if (RawPeerCertificateCaptureFilter.isMtlsTokenPath(request.getServletPath())
+                && !GRANT_TYPE_CLIENT_CREDENTIALS.equals(parameters.get("grant_type"))) {
+            throw new InvalidGrantException("the mTLS token endpoint only issues client_credentials tokens");
+        }
     }
 
     @RequestMapping(value = "**")

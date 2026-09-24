@@ -1,6 +1,11 @@
 package org.cloudfoundry.identity.uaa.oauth.token;
 import org.assertj.core.api.InstanceOfAssertFactories;
 import org.cloudfoundry.identity.uaa.oauth.common.OAuth2AccessToken;
+import org.cloudfoundry.identity.uaa.oauth.common.exceptions.InvalidGrantException;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.mock.web.MockHttpServletRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -27,6 +32,8 @@ import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 import static org.springframework.http.HttpMethod.GET;
 import static org.springframework.http.HttpMethod.POST;
 
@@ -46,14 +53,14 @@ class UaaTokenEndpointTests {
     @Test
     void allowsGetByDefault() throws Exception {
         doReturn(mockResponseEntity).when(endpoint).postAccessToken(any(), any());
-        ResponseEntity<OAuth2AccessToken> result = endpoint.doDelegateGet(mock(Principal.class), emptyMap());
+        ResponseEntity<OAuth2AccessToken> result = endpoint.doDelegateGet(mock(Principal.class), emptyMap(), new MockHttpServletRequest());
         assertThat(result).isSameAs(mockResponseEntity);
     }
 
     @Test
     void getIsDisabled() {
         endpoint = spy(new UaaTokenEndpoint(null, null, null, null, false));
-        assertThatThrownBy(() -> endpoint.doDelegateGet(mock(Principal.class), emptyMap())).asInstanceOf(InstanceOfAssertFactories.throwable(HttpRequestMethodNotSupportedException.class));
+        assertThatThrownBy(() -> endpoint.doDelegateGet(mock(Principal.class), emptyMap(), new MockHttpServletRequest())).asInstanceOf(InstanceOfAssertFactories.throwable(HttpRequestMethodNotSupportedException.class));
     }
 
     @Test
@@ -78,7 +85,7 @@ class UaaTokenEndpointTests {
 
         assertThat(mapping.value())
                 .contains("/oauth/mtls/token");
-        assertThat(UaaTokenEndpoint.class.getDeclaredMethod("doDelegateGet", Principal.class, Map.class)
+        assertThat(UaaTokenEndpoint.class.getDeclaredMethod("doDelegateGet", Principal.class, Map.class, HttpServletRequest.class)
                 .getAnnotation(GetMapping.class).value())
                 .containsExactly("**");
         assertThat(UaaTokenEndpoint.class.getDeclaredMethod("doDelegatePost", Principal.class, Map.class,
@@ -99,8 +106,52 @@ class UaaTokenEndpointTests {
     void callToGetAlwaysThrowsOverrideMethod() {
         endpoint = new UaaTokenEndpoint(null, null, null, null, false);
 
-        assertThatThrownBy(() -> endpoint.doDelegateGet(mock(Principal.class), emptyMap()))
+        assertThatThrownBy(() -> endpoint.doDelegateGet(mock(Principal.class), emptyMap(), new MockHttpServletRequest()))
                 .isInstanceOf(HttpRequestMethodNotSupportedException.class)
                 .satisfies(e -> assertThat(((HttpRequestMethodNotSupportedException) e).getMethod()).isEqualTo("GET"));
+    }
+
+    @ParameterizedTest
+    @NullAndEmptySource
+    @ValueSource(strings = {"password", "refresh_token", "authorization_code", "implicit",
+            "urn:ietf:params:oauth:grant-type:jwt-bearer", "urn:ietf:params:oauth:grant-type:saml2-bearer",
+            "urn:ietf:params:oauth:grant-type:token-exchange", "user_token", "unknown-grant"})
+    void mtlsRejectsOtherGrantsBeforeDelegating(String grantType) throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setServletPath("/oauth/mtls/token/alias");
+        Map<String, String> parameters = grantType == null ? Map.of() : Map.of("grant_type", grantType);
+
+        assertThatThrownBy(() -> endpoint.doDelegatePost(mock(Principal.class), parameters, request))
+                .isInstanceOf(InvalidGrantException.class)
+                .hasMessage("the mTLS token endpoint only issues client_credentials tokens");
+        assertThatThrownBy(() -> endpoint.doDelegateGet(mock(Principal.class), parameters, request))
+                .isInstanceOf(InvalidGrantException.class)
+                .hasMessage("the mTLS token endpoint only issues client_credentials tokens");
+        verify(endpoint, never()).getAccessToken(any(), any());
+        verify(endpoint, never()).postAccessToken(any(), any());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"/oauth/mtls/token", "/oauth/mtls/token/alias"})
+    void mtlsClientCredentialsStillDelegates(String path) throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setServletPath(path);
+        Map<String, String> parameters = Map.of("grant_type", "client_credentials");
+        doReturn(mockResponseEntity).when(endpoint).postAccessToken(any(), any());
+
+        assertThat(endpoint.doDelegatePost(mock(Principal.class), parameters, request)).isSameAs(mockResponseEntity);
+        assertThat(endpoint.doDelegateGet(mock(Principal.class), parameters, request)).isSameAs(mockResponseEntity);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"/oauth/token", "/oauth/token/alias/idp"})
+    void ordinaryEndpointStillDelegatesUserGrants(String path) throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setServletPath(path);
+        Map<String, String> parameters = Map.of("grant_type", "password");
+        doReturn(mockResponseEntity).when(endpoint).postAccessToken(any(), any());
+
+        assertThat(endpoint.doDelegatePost(mock(Principal.class), parameters, request)).isSameAs(mockResponseEntity);
+        assertThat(endpoint.doDelegateGet(mock(Principal.class), parameters, request)).isSameAs(mockResponseEntity);
     }
 }
