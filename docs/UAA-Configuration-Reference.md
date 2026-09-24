@@ -1266,6 +1266,12 @@ are omitted at token generation. Use the dedicated `tls-client-auth-sub-template
 `tls-client-auth-aud-templates` properties for subject and audience customization. See the
 [client authentication reference](UAA-Client-Authentication.md#configuration) for the full list.
 
+Nonblank `tls-client-auth-sub-template` values must contain a declared `{claim}` placeholder;
+constant subjects are rejected during configuration. Constant or oversized subject templates
+that reach token generation fail issuance with HTTP `500` / `server_error`. Blank means no
+subject override (the default `sub = client_id`). This rule
+does not apply to `tls-client-auth-aud-templates`: literal federation audiences remain supported.
+
 ```yaml
 uaa.mtls-enabled: true
 ```

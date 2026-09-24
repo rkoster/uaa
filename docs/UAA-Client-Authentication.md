@@ -167,8 +167,8 @@ for a client configured with `tls-client-auth-ca`.
 | `tls-client-auth-trusted-proxy-ca` | conditional | PEM-encoded CA certificate the Gorouter's own backend mTLS certificate must chain to. Configuring this switches the client to the Gorouter/XFCC-forwarding-only topology (requiring the `X-Forwarded-Client-Cert` header) -- see "Deployment topology" above. Leave unset for a direct-connection-only client. |
 | `tls-client-auth-required-claims` | no | Map of `claimName -> requiredValue`, checked against the values already produced by `tls-client-auth-claim-mappings`. When configured, authentication fails unless every entry matches exactly -- e.g. `{space_guid: "<specific-space-guid>"}` scopes this client to a single CF space, even if other clients share the same `tls-client-auth-ca`. |
 | `tls-client-auth-claim-mappings` | no | List of `{field, pattern, claim}` mappings from certificate subject fields (`subject_cn`, `subject_ou`, `subject_o`) to JWT claim names. `subject_cn` and `subject_o` map their values directly; `pattern` is supported only for `subject_ou`, where it extracts a capture group. Patterns are UAA administrator-controlled configuration and are evaluated on every mTLS authentication request; use efficient Java regular expressions and avoid patterns with catastrophic backtracking. |
-| `tls-client-auth-sub-template` | no | Template string rendered (using the mapped claim values) to produce the JWT `sub` claim. |
-| `tls-client-auth-aud-templates` | no | List of template strings rendered to produce the JWT `aud` claim. |
+| `tls-client-auth-sub-template` | no | Template string rendered using mapped certificate values to produce `sub`. A nonblank template must contain at least one declared `{claim}` placeholder. Blank means no override. |
+| `tls-client-auth-aud-templates` | no | List of template strings rendered to produce `aud`. Literal audiences such as `sts.amazonaws.com` or `api://AzureADTokenExchange` are supported. |
 
 Claim mappings must target custom JWT roots, such as `app_guid` or `cf.app`. Reserved roots are
 `jti`, `sub`, `aud`, `iss`, `exp`, `iat`, `nbf`, `zid`, `scope`, `granted_scopes`, `authorities`,
@@ -181,6 +181,15 @@ Client creation/update and YAML bootstrap reject reserved mappings. If an older 
 contains one, token generation omits that mapping. UAA supplies the certificate confirmation
 claim itself. Configure `sub` and `aud` through their dedicated template properties; custom
 claim mappings and literal audience templates remain supported.
+
+Nonblank subject templates without a placeholder are rejected during client creation/update
+and YAML bootstrap. If a constant or oversized subject template nevertheless reaches token
+generation, issuance fails with HTTP `500` / `server_error`; no token is returned. There is no
+compatibility fallback for invalid subject configuration. An absent or blank template uses
+`sub = client_id`; unresolved subject placeholders also leave that default in place.
+This guard ties a customized subject to certificate data; it does not guarantee uniqueness.
+Administrators must choose a workload namespace that avoids identity collisions, and relying
+services must validate issuer, audience, and the intended workload identity.
 
 Example (Gorouter-fronted; a Cloud Foundry app instance identity certificate mapped to
 `cf_instance_guid`/`app_guid`/`space_guid`/`org_guid` claims):

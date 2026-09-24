@@ -160,8 +160,8 @@ public class MtlsClaimsEnhancer implements UaaTokenEnhancer {
         }
 
         // PHASE 3 — template rendering for sub and aud
-        if (config.getSubTemplate() != null) {
-            String rendered = renderTemplate(config.getSubTemplate(), vars);
+        if (config.getSubTemplate() != null && !config.getSubTemplate().isBlank()) {
+            String rendered = renderTemplate(config.getSubTemplate(), vars, true);
             if (rendered != null) {
                 result.put("sub", rendered);
             }
@@ -174,7 +174,7 @@ public class MtlsClaimsEnhancer implements UaaTokenEnhancer {
                 if (tmpl == null) {
                     continue;
                 }
-                String rendered = renderTemplate(tmpl, vars);
+                String rendered = renderTemplate(tmpl, vars, false);
                 if (rendered != null) {
                     audList.add(rendered);
                 }
@@ -191,29 +191,36 @@ public class MtlsClaimsEnhancer implements UaaTokenEnhancer {
      * Renders a template string by substituting all {@code {varName}} placeholders
      * from {@code vars}. Returns {@code null} if any placeholder has no corresponding
      * value in {@code vars} (the whole template is then dropped by the caller).
+     * Nonblank subject templates require a placeholder and fail issuance if invalid;
+     * audiences may be literal recipient identifiers.
      *
      * <p>Variable names may contain dots (e.g. {@code {cf.org}}); dots inside braces
      * are treated as part of the name, not as path separators.
      *
-     * <p>Returns {@code null} without attempting to match if {@code template} exceeds
-     * {@link #MAX_TEMPLATE_LENGTH}, treating an oversized template the same as an unresolvable
-     * one (silently dropped by the caller) rather than a hard failure -- a hard failure here
-     * would break every future token request for a client with a pre-existing, already-persisted
-     * oversized template.
+     * <p>Checks {@link #MAX_TEMPLATE_LENGTH} before regex matching. Oversized subject templates
+     * fail issuance; oversized audience templates are omitted.
      */
-    private String renderTemplate(String template, Map<String, String> vars) {
+    private String renderTemplate(String template, Map<String, String> vars, boolean requirePlaceholder) {
         if (template.length() > MAX_TEMPLATE_LENGTH) {
+            if (requirePlaceholder) {
+                throw new IllegalStateException("Invalid tls-client-auth-sub-template: maximum length exceeded");
+            }
             return null;
         }
         StringBuilder sb = new StringBuilder();
         Matcher m = PLACEHOLDER.matcher(template);
+        boolean hasPlaceholder = false;
         while (m.find()) {
+            hasPlaceholder = true;
             String varName = m.group(1);
             String value   = vars.get(varName);
             if (value == null) {
                 return null;  // unresolved placeholder → caller should drop this template
             }
             m.appendReplacement(sb, Matcher.quoteReplacement(value));
+        }
+        if (requirePlaceholder && !hasPlaceholder) {
+            throw new IllegalStateException("Invalid tls-client-auth-sub-template: must contain at least one {claim} placeholder");
         }
         m.appendTail(sb);
         return sb.toString();

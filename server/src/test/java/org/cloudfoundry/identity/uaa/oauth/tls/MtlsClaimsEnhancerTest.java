@@ -259,6 +259,45 @@ class MtlsClaimsEnhancerTest {
             "o/org-guid/s/space-guid/a/app-guid");
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"fixed-workload", "00000000-0000-0000-0000-000000000000", "{}", "{cf.app"})
+    void rejectsSubjectWithoutPlaceholderAtIssuance(String template) throws Exception {
+        X509Certificate cert = mockCfCert();
+        when(tlsClientAuthentication.hasCertificateFromRequest()).thenReturn(true);
+        when(tlsClientAuthentication.getCertificateFromRequest(any())).thenReturn(cert);
+        TlsClientAuthConfiguration config = cfMappingsConfig();
+        config.setSubTemplate(template);
+        config.setAudTemplates(List.of("sts.amazonaws.com", "api://AzureADTokenExchange", "workload/{cf.app}"));
+        UaaClientDetails client = new UaaClientDetails();
+        client.setClientId("instance-identity");
+        client.setTlsClientAuthConfiguration(config);
+        when(clientDetailsService.loadClientByClientId("instance-identity")).thenReturn(client);
+
+        assertThatThrownBy(() -> enhancer.enhance(Map.of(), mockAuthentication("instance-identity")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContainingAll("tls-client-auth-sub-template", "placeholder");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "   "})
+    void blankSubjectMeansNoOverrideAndPreservesAudiences(String template) throws Exception {
+        X509Certificate cert = mockCfCert();
+        when(tlsClientAuthentication.hasCertificateFromRequest()).thenReturn(true);
+        when(tlsClientAuthentication.getCertificateFromRequest(any())).thenReturn(cert);
+        TlsClientAuthConfiguration config = cfMappingsConfig();
+        config.setSubTemplate(template);
+        config.setAudTemplates(List.of("sts.amazonaws.com", "api://AzureADTokenExchange", "workload/{cf.app}"));
+        UaaClientDetails client = new UaaClientDetails();
+        client.setClientId("instance-identity");
+        client.setTlsClientAuthConfiguration(config);
+        when(clientDetailsService.loadClientByClientId("instance-identity")).thenReturn(client);
+
+        assertThat(enhancer.enhance(Map.of(), mockAuthentication("instance-identity")))
+                .doesNotContainKey("sub")
+                .containsEntry("aud", List.of("sts.amazonaws.com", "api://AzureADTokenExchange", "workload/app-guid"))
+                .containsKeys("cnf", "cf");
+    }
+
     @Test
     void audTemplatesRenderedAndOverrideDefault() throws Exception {
         X509Certificate cert = mockCfCert();
@@ -615,11 +654,8 @@ class MtlsClaimsEnhancerTest {
     }
 
     @Test
-    void subOmittedWhenTemplateExceedsMaxLength() throws Exception {
-        // Defense-in-depth: covers BOSH-flat-config-bootstrapped clients, which bypass
-        // ClientAdminEndpointsValidator's admin-API-time length check entirely. An oversized
-        // template must be dropped (not hang or throw), consistent with renderTemplate's
-        // existing "unresolved placeholder" contract.
+    void oversizedSubjectFailsBeforeRegexMatching() throws Exception {
+        // Invalid configuration must fail issuance without expensive regex matching.
         X509Certificate cert = mockCfCert();
         when(tlsClientAuthentication.hasCertificateFromRequest()).thenReturn(true);
         when(tlsClientAuthentication.getCertificateFromRequest(any())).thenReturn(cert);
@@ -634,10 +670,11 @@ class MtlsClaimsEnhancerTest {
         when(clientDetailsService.loadClientByClientId("instance-identity")).thenReturn(clientDetails);
 
         long start = System.nanoTime();
-        Map<String, Object> result = enhancer.enhance(new HashMap<>(), mockAuthentication("instance-identity"));
+        assertThatThrownBy(() -> enhancer.enhance(new HashMap<>(), mockAuthentication("instance-identity")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContainingAll("tls-client-auth-sub-template", "maximum length");
         long elapsedMillis = (System.nanoTime() - start) / 1_000_000;
 
-        assertThat(result).doesNotContainKey("sub");
         assertThat(elapsedMillis).isLessThan(100);
     }
 

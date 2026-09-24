@@ -509,6 +509,11 @@ public class ClientAdminEndpointsValidator implements InitializingBean, ClientDe
         }
         if (rawSubTemplate instanceof String subTemplate && !subTemplate.isBlank()) {
             checkTemplateLength(subTemplate, TlsClientAuthConfiguration.TLS_CLIENT_AUTH_SUB_TEMPLATE, clientId);
+            if (!PLACEHOLDER.matcher(subTemplate).find()) {
+                throw new InvalidClientDetailsException(
+                        "tls-client-auth-sub-template must contain at least one {claim} placeholder for client_id="
+                                + clientId);
+            }
             validateTemplatePlaceholders(subTemplate, declaredClaims,
                     TlsClientAuthConfiguration.TLS_CLIENT_AUTH_SUB_TEMPLATE, clientId);
         }

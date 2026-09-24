@@ -781,6 +781,22 @@ class ClientAdminBootstrapTests {
     }
 
     @Test
+    void constantSubjectTemplateIsRejectedDuringBootstrap() {
+        ClientAdminBootstrap bootstrap = new ClientAdminBootstrap(passwordEncoder,
+                multitenantJdbcClientDetailsService, clientMetadataProvisioning, true, clients,
+                Collections.singleton(autoApproveId), Collections.emptySet(), null,
+                Collections.singleton(allowPublicId), true);
+        Map<String, Object> map = createClientMap("constant-subject");
+        map.put(TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CA, VALID_CERT);
+        map.put(TlsClientAuthConfiguration.TLS_CLIENT_AUTH_SUB_TEMPLATE, "fixed-subject");
+        clients.put("constant-subject", map);
+
+        assertThatThrownBy(bootstrap::afterPropertiesSet)
+                .isInstanceOf(InvalidClientDetailsException.class)
+                .hasMessageContainingAll("tls-client-auth-sub-template", "placeholder", "constant-subject");
+    }
+
+    @Test
     void tokenEndpointAuthMethodMetadataBootstrapsWhenMtlsDisabled() {
         Map<String, Object> map = createClientMap("metadata-client");
         map.put("token-endpoint-auth-method", "tls_client_auth");

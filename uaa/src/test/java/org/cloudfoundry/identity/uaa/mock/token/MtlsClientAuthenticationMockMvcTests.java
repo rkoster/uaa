@@ -364,6 +364,69 @@ class MtlsClientAuthenticationMockMvcTests extends AbstractTokenMockMvcTests {
     }
 
     @ParameterizedTest
+    @ValueSource(strings = {"POST", "PUT"})
+    void clientAdminRejectsConstantSubjectTemplate(String method) throws Exception {
+        String clientId = method.equals("PUT") ? createMtlsClient(caPem) : "constantsub" + generator.generate();
+        Map<String, Object> client = Map.of(
+                "client_id", clientId, "authorized_grant_types", List.of(GRANT_TYPE_CLIENT_CREDENTIALS),
+                "scope", List.of("uaa.none"), "authorities", List.of("uaa.resource"),
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CA, caPem,
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CLAIM_MAPPINGS,
+                List.of(new TlsClientAuthConfiguration.ClaimMapping("subject_cn", null, "app_id")),
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_SUB_TEMPLATE, "00000000-0000-0000-0000-000000000000");
+        String path = method.equals("POST") ? "/oauth/clients" : "/oauth/clients/" + clientId;
+        var response = mockMvc.perform(request(HttpMethod.valueOf(method), path)
+                        .header(AUTHORIZATION, "Bearer " + adminToken)
+                        .contentType(APPLICATION_JSON).accept(APPLICATION_JSON)
+                        .content(JsonUtils.writeValueAsString(client)))
+                .andExpect(status().isBadRequest()).andReturn().getResponse();
+        assertThat(JsonUtils.readValueAsMap(response.getContentAsString()).get("error_description"))
+                .asString().contains("tls-client-auth-sub-template", "placeholder");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"00000000-0000-0000-0000-000000000000", "fixed-subject"})
+    void invalidStoredConstantSubjectPreventsTokenIssuance(String subject) throws Exception {
+        String clientId = "invalidsub" + generator.generate();
+        // Deliberately bypass configuration validation to exercise the issuance guard.
+        setUpClients(clientId, "uaa.resource", "uaa.resource", GRANT_TYPE_CLIENT_CREDENTIALS,
+                false, null, null, -1, IdentityZone.getUaa(), Map.of(
+                        TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CA, caPem,
+                        TlsClientAuthConfiguration.TLS_CLIENT_AUTH_SUB_TEMPLATE, subject,
+                        TlsClientAuthConfiguration.TLS_CLIENT_AUTH_AUD_TEMPLATES,
+                        List.of("sts.amazonaws.com", "api://AzureADTokenExchange")));
+        clientDetailsService.updateClientSecret(clientId, null);
+        mockMvc.perform(tokenRequest(clientId, ClientIdentification.PARAMETER, leaf))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.error").value("server_error"))
+                .andExpect(jsonPath("$.access_token").doesNotExist())
+                .andExpect(jsonPath("$.refresh_token").doesNotExist());
+    }
+
+    @Test
+    void literalAudiencesWorkWithoutSubjectOverride() throws Exception {
+        String clientId = "literalaud" + generator.generate();
+        setUpClients(clientId, "uaa.resource", "uaa.resource", GRANT_TYPE_CLIENT_CREDENTIALS,
+                false, null, null, -1, IdentityZone.getUaa(), Map.of(
+                        TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CA, caPem,
+                        TlsClientAuthConfiguration.TLS_CLIENT_AUTH_AUD_TEMPLATES,
+                        List.of("sts.amazonaws.com", "api://AzureADTokenExchange")));
+        clientDetailsService.updateClientSecret(clientId, null);
+        var response = mockMvc.perform(tokenRequest(clientId, ClientIdentification.PARAMETER, leaf))
+                .andExpect(status().isOk()).andReturn().getResponse();
+        Map<String, Object> body = JsonUtils.readValueAsMap(response.getContentAsString());
+        var token = JwtHelper.decode((String) body.get("access_token"));
+        token.verifySignature(keyInfoService.getKey(token.getHeader().getKid()).getVerifier());
+        Map<String, Object> claims = JsonUtils.readValueAsMap(token.getClaims());
+        String thumbprint = Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(MessageDigest.getInstance("SHA-256").digest(leaf.getEncoded()));
+        assertThat(claims).containsEntry("sub", clientId)
+                .containsEntry("aud", List.of("sts.amazonaws.com", "api://AzureADTokenExchange"))
+                .containsEntry("client_auth_method", "tls_client_auth")
+                .containsEntry("cnf", Map.of("x5t#S256", thumbprint));
+    }
+
+    @ParameterizedTest
     @ValueSource(strings = {"amr", "acr", "amr.method", "acr.level"})
     void persistedMappingsCannotForgeTokenAuthenticationContext(String claim) throws Exception {
         String clientId = "legacyclaims" + generator.generate();

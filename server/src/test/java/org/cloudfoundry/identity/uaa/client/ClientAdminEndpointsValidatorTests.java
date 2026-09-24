@@ -714,6 +714,36 @@ class ClientAdminEndpointsValidatorTests {
                 ClientAdminEndpointsValidator.validateTlsClientAuthClaimConfig(info, "client-id"));
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"fixed-workload", "00000000-0000-0000-0000-000000000000", "{}", "{app_id"})
+    void rejectsSubjectTemplateWithoutPlaceholder(String template) {
+        Map<String, Object> info = Map.of(
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CLAIM_MAPPINGS,
+                List.of(Map.of("field", "subject_cn", "claim", "app_id")),
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_SUB_TEMPLATE, template);
+
+        assertThatThrownBy(() -> ClientAdminEndpointsValidator.validateTlsClientAuthClaimConfig(info, "client-id"))
+                .isInstanceOf(InvalidClientDetailsException.class)
+                .hasMessageContainingAll("tls-client-auth-sub-template", "placeholder", "client-id");
+    }
+
+    @Test
+    void acceptsLiteralAudiencesWithoutClaimMappings() {
+        assertThatNoException().isThrownBy(() -> ClientAdminEndpointsValidator.validateTlsClientAuthClaimConfig(
+                Map.of(TlsClientAuthConfiguration.TLS_CLIENT_AUTH_AUD_TEMPLATES,
+                        List.of("sts.amazonaws.com", "api://AzureADTokenExchange")), "client-id"));
+    }
+
+    @Test
+    void acceptsValidSubjectTemplateAtMaximumLength() {
+        String placeholder = "{app_id}";
+        String template = "w".repeat(ClientAdminEndpointsValidator.MAX_TEMPLATE_LENGTH - placeholder.length()) + placeholder;
+        assertThatNoException().isThrownBy(() -> ClientAdminEndpointsValidator.validateTlsClientAuthClaimConfig(
+                Map.of(TlsClientAuthConfiguration.TLS_CLIENT_AUTH_SUB_TEMPLATE, template,
+                        TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CLAIM_MAPPINGS,
+                        List.of(Map.of("field", "subject_cn", "claim", "app_id"))), "client-id"));
+    }
+
     @Test
     void validateTlsClientAuthClaimConfig_rejectsSubTemplateExceedingMaxLength() {
         // CodeQL: js/polynomial-redos on the PLACEHOLDER regex (\{([^}]+)\}). The possessive
@@ -749,10 +779,8 @@ class ClientAdminEndpointsValidatorTests {
     }
 
     @Test
-    void validateTlsClientAuthClaimConfig_acceptsSubTemplateAtExactlyMaxLength() {
-        // A pathological all-'{' template of exactly MAX_TEMPLATE_LENGTH characters must still
-        // be processed quickly, confirming the bound (combined with the possessive quantifier)
-        // makes this genuinely fast rather than merely rejected.
+    void validateTlsClientAuthClaimConfig_rejectsPlaceholderlessSubTemplateAtMaxLengthQuickly() {
+        // Preserve the timing bound for pathological input, now rejected for lacking a placeholder.
         String maxLengthSubTemplate = "{".repeat(ClientAdminEndpointsValidator.MAX_TEMPLATE_LENGTH);
         Map<String, Object> info = new java.util.HashMap<>();
         info.put(TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CLAIM_MAPPINGS,
@@ -760,10 +788,9 @@ class ClientAdminEndpointsValidatorTests {
         info.put(TlsClientAuthConfiguration.TLS_CLIENT_AUTH_SUB_TEMPLATE, maxLengthSubTemplate);
 
         long start = System.nanoTime();
-        // The all-'{' template never closes a placeholder, so no undeclared-placeholder
-        // exception is thrown -- validateTemplatePlaceholders() simply finds no matches.
-        assertThatNoException().isThrownBy(() ->
-                ClientAdminEndpointsValidator.validateTlsClientAuthClaimConfig(info, "client-id"));
+        assertThatThrownBy(() -> ClientAdminEndpointsValidator.validateTlsClientAuthClaimConfig(info, "client-id"))
+                .isInstanceOf(InvalidClientDetailsException.class)
+                .hasMessageContainingAll("tls-client-auth-sub-template", "placeholder");
         long elapsedMillis = (System.nanoTime() - start) / 1_000_000;
 
         assertThat(elapsedMillis).isLessThan(100);
