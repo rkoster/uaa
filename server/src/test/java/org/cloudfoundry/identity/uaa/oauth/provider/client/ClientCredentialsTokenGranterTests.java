@@ -2,6 +2,7 @@ package org.cloudfoundry.identity.uaa.oauth.provider.client;
 
 import org.cloudfoundry.identity.uaa.authentication.UaaAuthenticationDetails;
 import org.cloudfoundry.identity.uaa.oauth.common.DefaultOAuth2AccessToken;
+import org.cloudfoundry.identity.uaa.oauth.common.DefaultOAuth2RefreshToken;
 import org.cloudfoundry.identity.uaa.oauth.common.OAuth2AccessToken;
 import org.cloudfoundry.identity.uaa.oauth.common.exceptions.InvalidRequestException;
 import org.cloudfoundry.identity.uaa.oauth.provider.ClientDetails;
@@ -14,6 +15,8 @@ import org.cloudfoundry.identity.uaa.oauth.token.TokenConstants;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 
@@ -67,10 +70,29 @@ class ClientCredentialsTokenGranterTests {
         assertThat(clientCredentialsTokenGranter.grant(TokenConstants.GRANT_TYPE_CLIENT_CREDENTIALS, tokenRequest)).isNull();
     }
 
-    @Test
-    void tlsClientAuthIsAllowedForClientCredentials() {
-        assertThat(ClientCredentialsTokenGranter.isAllowedAuthMethod(
-                TokenConstants.CLIENT_AUTH_TLS_CLIENT_AUTH)).isTrue();
+    @ParameterizedTest
+    @ValueSource(strings = {TokenConstants.CLIENT_AUTH_TLS_CLIENT_AUTH,
+            TokenConstants.CLIENT_AUTH_PRIVATE_KEY_JWT, TokenConstants.CLIENT_AUTH_SECRET})
+    void grantReturnsAccessTokenWithoutRefreshToken(String method) {
+        var authentication = new UsernamePasswordAuthenticationToken("client", null, Collections.emptyList());
+        UaaAuthenticationDetails details = mock(UaaAuthenticationDetails.class);
+        when(details.getAuthenticationMethod()).thenReturn(method);
+        authentication.setDetails(details);
+        SecurityContextHolder.getContext().setAuthentication(authentication);
+        OAuth2Request request = mock(OAuth2Request.class);
+        when(clientDetailsService.loadClientByClientId(any())).thenReturn(mock(ClientDetails.class));
+        when(requestFactory.createOAuth2Request(any(), any())).thenReturn(request);
+        when(request.getAuthorities()).thenReturn(Collections.emptyList());
+        DefaultOAuth2AccessToken issued = new DefaultOAuth2AccessToken("access-token");
+        issued.setRefreshToken(new DefaultOAuth2RefreshToken("refresh-token"));
+        when(tokenServices.createAccessToken(any())).thenReturn(issued);
+
+        OAuth2AccessToken result = clientCredentialsTokenGranter.grant(TokenConstants.GRANT_TYPE_CLIENT_CREDENTIALS, tokenRequest);
+
+        assertThat(result).isNotNull();
+        assertThat(result.getValue()).isEqualTo("access-token");
+        assertThat(result.getRefreshToken()).isNull();
+        assertThat(issued.getRefreshToken()).isNotNull();
     }
 
     @Test

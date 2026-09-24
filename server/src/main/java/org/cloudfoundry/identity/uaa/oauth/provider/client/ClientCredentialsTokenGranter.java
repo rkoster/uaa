@@ -27,10 +27,6 @@ public class ClientCredentialsTokenGranter extends AbstractTokenGranter {
 
     private static final List<String> ALLOWED_AUTH_METHODS = List.of(CLIENT_AUTH_SECRET, CLIENT_AUTH_PRIVATE_KEY_JWT, CLIENT_AUTH_TLS_CLIENT_AUTH);
 
-    public static boolean isAllowedAuthMethod(String method) {
-        return ALLOWED_AUTH_METHODS.contains(method);
-    }
-
     public ClientCredentialsTokenGranter(AuthorizationServerTokenServices tokenServices,
             ClientDetailsService clientDetailsService, OAuth2RequestFactory requestFactory) {
         this(tokenServices, clientDetailsService, requestFactory, GRANT_TYPE_CLIENT_CREDENTIALS);
