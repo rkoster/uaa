@@ -3,10 +3,12 @@ package org.cloudfoundry.identity.uaa.client;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import org.cloudfoundry.identity.uaa.oauth.token.ClaimConstants;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 @JsonInclude(JsonInclude.Include.NON_NULL)
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -18,6 +20,23 @@ public class TlsClientAuthConfiguration {
     public static final String TLS_CLIENT_AUTH_AUD_TEMPLATES = "tls-client-auth-aud-templates";
     public static final String TLS_CLIENT_AUTH_TRUSTED_PROXY_CA = "tls-client-auth-trusted-proxy-ca";
     public static final String TLS_CLIENT_AUTH_REQUIRED_CLAIMS = "tls-client-auth-required-claims";
+
+    // UAA-owned token claims plus authentication context and certificate confirmation.
+    // sub/aud may be configured through their dedicated templates, never through claim mappings.
+    private static final Set<String> RESERVED_CLAIM_NAMES = Set.of(
+            ClaimConstants.JTI, ClaimConstants.SUB, ClaimConstants.AUD, ClaimConstants.ISS,
+            ClaimConstants.EXPIRY_IN_SECONDS, ClaimConstants.IAT, "nbf", ClaimConstants.ZONE_ID,
+            ClaimConstants.SCOPE, ClaimConstants.GRANTED_SCOPES, ClaimConstants.AUTHORITIES,
+            ClaimConstants.CLIENT_ID, ClaimConstants.CID, ClaimConstants.AZP, ClaimConstants.GRANT_TYPE,
+            ClaimConstants.USER_ID, ClaimConstants.USER_NAME, ClaimConstants.ORIGIN, ClaimConstants.EMAIL,
+            ClaimConstants.REVOCABLE, ClaimConstants.REVOCATION_SIGNATURE, ClaimConstants.PREVIOUS_LOGON_TIME,
+            ClaimConstants.AMR, ClaimConstants.ACR, ClaimConstants.AUTH_TIME, ClaimConstants.CLIENT_AUTH_METHOD, "cnf");
+
+    /** Tests the root claim, so dotted mappings cannot populate a reserved JWT object. */
+    public static boolean isReservedClaimMapping(String claim) {
+        int dot = claim.indexOf('.');
+        return RESERVED_CLAIM_NAMES.contains(dot > 0 ? claim.substring(0, dot) : claim);
+    }
 
     @JsonProperty(TLS_CLIENT_AUTH_CA)
     private String trustedCaPem;

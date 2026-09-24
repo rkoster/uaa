@@ -489,6 +489,12 @@ public class ClientAdminEndpointsValidator implements InitializingBean, ClientDe
                 throw new InvalidClientDetailsException(
                         "tls-client-auth-claim-mappings entry has a blank claim for client_id=" + clientId);
             }
+            if (TlsClientAuthConfiguration.isReservedClaimMapping(claim)) {
+                throw new InvalidClientDetailsException(
+                        "tls-client-auth-claim-mappings entry targets a reserved root claim: '" + claim
+                                + "' for client_id=" + clientId
+                                + ". Use tls-client-auth-sub-template or tls-client-auth-aud-templates for sub or aud.");
+            }
             String pattern = mapping.getPattern();
             if (pattern != null && !pattern.isBlank()) {
                 try {

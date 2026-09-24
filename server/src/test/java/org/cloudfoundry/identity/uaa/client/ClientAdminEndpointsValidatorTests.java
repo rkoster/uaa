@@ -27,6 +27,8 @@ import org.cloudfoundry.identity.uaa.zone.ZoneAwareClientSecretPolicyValidator;
 import org.cloudfoundry.identity.uaa.zone.beans.IdentityZoneManagerImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 
 import java.util.ArrayList;
@@ -466,6 +468,41 @@ class ClientAdminEndpointsValidatorTests {
     void validateTlsClientAuthClaimConfig_noOpWhenNoClaimMappingsKey() {
         assertThatNoException().isThrownBy(() ->
                 ClientAdminEndpointsValidator.validateTlsClientAuthClaimConfig(Map.of(), "client-id"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"amr", "acr", "auth_time", "client_auth_method", "cnf", "sub", "aud",
+            "iss", "scope", "client_id", "zid", "amr.method", "acr.level", "auth_time.value",
+            "client_auth_method.value", "cnf.x5t#S256", "sub.value", "aud.value", "scope.extra"})
+    void validateTlsClientAuthClaimConfig_rejectsReservedRootClaims(String claim) {
+        Map<String, Object> info = Map.of(TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CLAIM_MAPPINGS,
+                List.of(new TlsClientAuthConfiguration.ClaimMapping("subject_cn", null, claim)));
+
+        assertThatThrownBy(() -> ClientAdminEndpointsValidator.validateTlsClientAuthClaimConfig(info, "client-id"))
+                .isInstanceOf(InvalidClientDetailsException.class)
+                .hasMessageContainingAll("tls-client-auth-claim-mappings", "reserved", claim, "client-id");
+    }
+
+    @Test
+    void validateTlsClientAuthClaimConfig_rejectsReservedRootInJsonMappings() {
+        Map<String, Object> info = Map.of(TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CLAIM_MAPPINGS,
+                "[{\"field\":\"subject_cn\",\"claim\":\"acr.level\"}]");
+
+        assertThatThrownBy(() -> ClientAdminEndpointsValidator.validateTlsClientAuthClaimConfig(info, "client-id"))
+                .isInstanceOf(InvalidClientDetailsException.class)
+                .hasMessageContainingAll("tls-client-auth-claim-mappings", "reserved", "acr.level");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"cf.app", "workload.acr", "amr_custom", "app_id"})
+    void validateTlsClientAuthClaimConfig_acceptsCustomRootClaims(String claim) {
+        Map<String, Object> info = Map.of(TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CLAIM_MAPPINGS,
+                List.of(new TlsClientAuthConfiguration.ClaimMapping("subject_cn", null, claim)),
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_SUB_TEMPLATE, "workload/{" + claim + "}",
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_AUD_TEMPLATES, List.of("federation-audience"));
+
+        assertThatNoException().isThrownBy(() ->
+                ClientAdminEndpointsValidator.validateTlsClientAuthClaimConfig(info, "client-id"));
     }
 
     @Test

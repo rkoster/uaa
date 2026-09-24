@@ -9,6 +9,8 @@ import org.cloudfoundry.identity.uaa.oauth.provider.OAuth2Request;
 import org.cloudfoundry.identity.uaa.provider.ClientRegistrationException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 
 import javax.security.auth.x500.X500Principal;
@@ -100,6 +102,32 @@ class MtlsClaimsEnhancerTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> cnf = (Map<String, Object>) result.get("cnf");
         assertThat(cnf).containsKey("x5t#S256");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"amr", "acr", "auth_time", "client_auth_method", "sub", "aud", "iss",
+            "scope", "client_id", "zid", "amr.method", "acr.level", "auth_time.value",
+            "client_auth_method.value", "sub.value", "aud.value", "scope.extra"})
+    void persistedMappingsCannotEmitReservedRootClaims(String claim) throws Exception {
+        X509Certificate cert = mockCfCert();
+        when(tlsClientAuthentication.hasCertificateFromRequest()).thenReturn(true);
+        when(tlsClientAuthentication.getCertificateFromRequest(any())).thenReturn(cert);
+        UaaClientDetails client = new UaaClientDetails();
+        client.setClientId("instance-identity");
+        // Simulate legacy JDBC data, bypassing client-configuration validation.
+        client.setAdditionalInformation(Map.of(
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CA, "ca-pem",
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CLAIM_MAPPINGS, List.of(
+                        new TlsClientAuthConfiguration.ClaimMapping("subject_cn", null, claim),
+                        new TlsClientAuthConfiguration.ClaimMapping("subject_cn", null, "cf.instance"))));
+        when(clientDetailsService.loadClientByClientId("instance-identity")).thenReturn(client);
+
+        Map<String, Object> result = enhancer.enhance(Map.of(), mockAuthentication("instance-identity"));
+
+        assertThat(result).doesNotContainKeys("amr", "acr", "auth_time", "client_auth_method",
+                        "sub", "aud", "iss", "scope", "client_id", "zid")
+                .containsEntry("cf", Map.of("instance", "inst-guid"))
+                .containsKey("cnf");
     }
 
     @Test

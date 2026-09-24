@@ -21,6 +21,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
@@ -40,6 +41,7 @@ import java.security.cert.X509Certificate;
 import java.util.Base64;
 import java.util.Date;
 import java.util.Map;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.cloudfoundry.identity.uaa.oauth.token.TokenConstants.GRANT_TYPE_CLIENT_CREDENTIALS;
@@ -170,6 +172,58 @@ class MtlsClientAuthenticationMockMvcTests extends AbstractTokenMockMvcTests {
                         .param("grant_type", GRANT_TYPE_CLIENT_CREDENTIALS))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.access_token").isNotEmpty());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"amr", "acr", "amr.method", "acr.level"})
+    void clientAdminRejectsReservedClaimMappings(String claim) throws Exception {
+        Map<String, Object> client = Map.of(
+                "client_id", "reservedclaim" + generator.generate(),
+                "authorized_grant_types", List.of(GRANT_TYPE_CLIENT_CREDENTIALS),
+                "scope", List.of("uaa.none"), "authorities", List.of("uaa.resource"),
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CA, caPem,
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CLAIM_MAPPINGS,
+                List.of(new TlsClientAuthConfiguration.ClaimMapping("subject_cn", null, claim)));
+
+        var response = mockMvc.perform(post("/oauth/clients")
+                        .header(AUTHORIZATION, "Bearer " + adminToken)
+                        .contentType(APPLICATION_JSON).accept(APPLICATION_JSON)
+                        .content(JsonUtils.writeValueAsString(client)))
+                .andExpect(status().isBadRequest())
+                .andReturn().getResponse();
+        assertThat(JsonUtils.readValueAsMap(response.getContentAsString()).get("error_description"))
+                .asString().contains("tls-client-auth-claim-mappings", "reserved", claim);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"amr", "acr", "amr.method", "acr.level"})
+    void persistedMappingsCannotForgeTokenAuthenticationContext(String claim) throws Exception {
+        String clientId = "legacyclaims" + generator.generate();
+        setUpClients(clientId, "uaa.resource", "uaa.resource", GRANT_TYPE_CLIENT_CREDENTIALS,
+                false, null, null, -1, IdentityZone.getUaa(), Map.of(
+                        TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CA, caPem,
+                        TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CLAIM_MAPPINGS, List.of(
+                                new TlsClientAuthConfiguration.ClaimMapping("subject_cn", null, claim),
+                                new TlsClientAuthConfiguration.ClaimMapping("subject_cn", null, "cf.app")),
+                        TlsClientAuthConfiguration.TLS_CLIENT_AUTH_SUB_TEMPLATE, "workload/{cf.app}",
+                        TlsClientAuthConfiguration.TLS_CLIENT_AUTH_AUD_TEMPLATES, List.of("federation-audience")));
+        clientDetailsService.updateClientSecret(clientId, null);
+
+        var response = mockMvc.perform(tokenRequest(clientId, ClientIdentification.PARAMETER, leaf))
+                .andExpect(status().isOk()).andReturn().getResponse();
+        Map<String, Object> body = JsonUtils.readValueAsMap(response.getContentAsString());
+        var token = JwtHelper.decode((String) body.get("access_token"));
+        token.verifySignature(keyInfoService.getKey(token.getHeader().getKid()).getVerifier());
+        Map<String, Object> claims = JsonUtils.readValueAsMap(token.getClaims());
+        String thumbprint = Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(MessageDigest.getInstance("SHA-256").digest(leaf.getEncoded()));
+        assertThat(claims).doesNotContainKeys("amr", "acr")
+                .containsEntry("client_auth_method", "tls_client_auth")
+                .containsEntry("client_id", clientId)
+                .containsEntry("sub", "workload/test-workload")
+                .containsEntry("cf", Map.of("app", "test-workload"))
+                .containsEntry("cnf", Map.of("x5t#S256", thumbprint));
+        assertThat(claims.get("aud")).isIn("federation-audience", List.of("federation-audience"));
     }
 
     private void assertCertificateRejected(ClientIdentification identification, String trustedCa,

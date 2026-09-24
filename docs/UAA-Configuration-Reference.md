@@ -1247,6 +1247,13 @@ does not implement server-side TLS 1.3 post-handshake client-certificate request
 When `false` (the default), no client certificate is requested at the TLS layer at all, and any
 client configured with a `tls-client-auth-ca` property fails validation at creation/update time.
 
+Per-client `tls-client-auth-claim-mappings` may only populate custom JWT roots. Configuration
+validation rejects reserved roots such as `amr`, `acr`, `client_auth_method`, `cnf`, `sub`, and
+`aud`, including dotted targets such as `acr.level`. Older stored mappings to reserved roots
+are omitted at token generation. Use the dedicated `tls-client-auth-sub-template` and
+`tls-client-auth-aud-templates` properties for subject and audience customization. See the
+[client authentication reference](UAA-Client-Authentication.md#configuration) for the full list.
+
 ```yaml
 uaa.mtls-enabled: true
 ```

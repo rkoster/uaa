@@ -123,6 +123,11 @@ public class MtlsClaimsEnhancer implements UaaTokenEnhancer {
         for (Map.Entry<String, String> entry : vars.entrySet()) {
             String key   = entry.getKey();
             String value = entry.getValue();
+            // Legacy stored configurations may predate client-admin validation. Check before
+            // dot expansion so nested mappings cannot introduce reserved root claims either.
+            if (TlsClientAuthConfiguration.isReservedClaimMapping(key)) {
+                continue;
+            }
             // Only a single dot level is supported (spec: UAA-RFC8705-001 configurable-token-shape).
             // A key like "cf.app.id" would produce parent="cf", child="app.id" (not deeper nesting).
             int dotIdx = key.indexOf('.');

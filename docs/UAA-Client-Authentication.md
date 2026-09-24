@@ -151,6 +151,18 @@ present a certificate whose chain validates to the configured CA; no separate
 | `tls-client-auth-sub-template` | no | Template string rendered (using the mapped claim values) to produce the JWT `sub` claim. |
 | `tls-client-auth-aud-templates` | no | List of template strings rendered to produce the JWT `aud` claim. |
 
+Claim mappings must target custom JWT roots, such as `app_guid` or `cf.app`. Reserved roots are
+`jti`, `sub`, `aud`, `iss`, `exp`, `iat`, `nbf`, `zid`, `scope`, `granted_scopes`, `authorities`,
+`client_id`, `cid`, `azp`, `grant_type`, `user_id`, `user_name`, `origin`, `email`, `revocable`,
+`rev_sig`, `previous_logon_time`, `amr`, `acr`, `auth_time`, `client_auth_method`, and `cnf`.
+The same restriction applies to dotted mappings: `acr.level` is rejected because it would
+populate the reserved `acr` root; `workload.acr` is allowed.
+
+Client creation/update and YAML bootstrap reject reserved mappings. If an older stored client
+contains one, token generation omits that mapping. UAA supplies the certificate confirmation
+claim itself. Configure `sub` and `aud` through their dedicated template properties; custom
+claim mappings and literal audience templates remain supported.
+
 Example (Gorouter-fronted; a Cloud Foundry app instance identity certificate mapped to
 `cf_instance_guid`/`app_guid`/`space_guid`/`org_guid` claims):
 
