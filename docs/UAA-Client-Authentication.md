@@ -163,6 +163,10 @@ stored as inert additional client metadata for compatibility, including when mTL
 Its value cannot enable mTLS, disable certificate requirements, or restore secret authentication
 for a client configured with `tls-client-auth-ca`.
 
+Authentication and token enhancement use the same parser for the flat `tls-client-auth-*`
+metadata. Claim mappings, audience templates, and required claims can be native arrays/maps
+or JSON-encoded strings; both forms are interpreted identically. The CA remains a PEM string.
+
 | Property | Required | Description |
 |----------|----------|--------------|
 | `tls-client-auth-ca` | yes | PEM-encoded CA certificate. This is the per-client mTLS selector: requests to the fixed `/oauth/mtls/token` endpoint authenticate with a presented leaf certificate only when it chains to this CA. |

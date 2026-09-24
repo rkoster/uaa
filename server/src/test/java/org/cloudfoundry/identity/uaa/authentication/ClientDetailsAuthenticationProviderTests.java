@@ -16,6 +16,9 @@ import org.cloudfoundry.identity.uaa.oauth.tls.RawPeerCertificateCaptureFilter;
 import org.cloudfoundry.identity.uaa.oauth.tls.TlsClientAuthentication;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.cloudfoundry.identity.uaa.util.JsonUtils;
 import org.mockito.ArgumentCaptor;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.security.core.userdetails.UserDetailsService;
@@ -91,6 +94,42 @@ class ClientDetailsAuthenticationProviderTests {
         assertThat(config).isNotNull();
         assertThat(config.getTrustedCaPem())
             .isEqualTo("-----BEGIN CERTIFICATE-----\nMIIBxxx\n-----END CERTIFICATE-----\n");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void readsCompleteTlsConfigurationFromNativeOrJsonValues(boolean jsonEncoded) {
+        Object mappings = List.of(Map.of("field", "subject_cn", "claim", "app"));
+        Object audiences = List.of("sts.amazonaws.com", "workload/{app}");
+        Object requiredClaims = Map.of("app", "test-app");
+        UaaClient client = mock(UaaClient.class);
+        when(client.getAdditionalInformation()).thenReturn(Map.of(
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CA, "ca-pem",
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_TRUSTED_PROXY_CA, "proxy-pem",
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_SUB_TEMPLATE, "workload/{app}",
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CLAIM_MAPPINGS,
+                jsonEncoded ? JsonUtils.writeValueAsString(mappings) : mappings,
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_AUD_TEMPLATES,
+                jsonEncoded ? JsonUtils.writeValueAsString(audiences) : audiences,
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_REQUIRED_CLAIMS,
+                jsonEncoded ? JsonUtils.writeValueAsString(requiredClaims) : requiredClaims));
+        TlsClientAuthConfiguration expected = new TlsClientAuthConfiguration("ca-pem",
+                List.of(new TlsClientAuthConfiguration.ClaimMapping("subject_cn", null, "app")));
+        expected.setTrustedProxyCaPem("proxy-pem");
+        expected.setSubTemplate("workload/{app}");
+        expected.setAudTemplates(List.of("sts.amazonaws.com", "workload/{app}"));
+        expected.setRequiredClaims(Map.of("app", "test-app"));
+
+        assertThat(ClientDetailsAuthenticationProvider.getTlsClientAuthConfiguration(client)).isEqualTo(expected);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"tls-client-auth-claim-mappings", "tls-client-auth-aud-templates", "tls-client-auth-required-claims"})
+    void malformedJsonDoesNotProducePartialConfiguration(String property) {
+        UaaClient client = mock(UaaClient.class);
+        when(client.getAdditionalInformation()).thenReturn(Map.of(
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CA, "ca-pem", property, "[invalid"));
+        assertThat(ClientDetailsAuthenticationProvider.getTlsClientAuthConfiguration(client)).isNull();
     }
 
     @Test

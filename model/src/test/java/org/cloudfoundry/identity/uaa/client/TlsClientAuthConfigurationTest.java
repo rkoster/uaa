@@ -2,6 +2,9 @@ package org.cloudfoundry.identity.uaa.client;
 
 import tools.jackson.databind.json.JsonMapper;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.cloudfoundry.identity.uaa.util.JsonUtils;
 
 import java.util.List;
 import java.util.Map;
@@ -11,6 +14,52 @@ import static org.assertj.core.api.Assertions.assertThat;
 class TlsClientAuthConfigurationTest {
 
     private static final String EXAMPLE_CA = "-----BEGIN CERTIFICATE-----\nMIIBxxx\n-----END CERTIFICATE-----\n";
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void factoryParsesCompleteNativeOrJsonConfiguration(boolean jsonEncoded) {
+        Object mappings = List.of(Map.of("field", "subject_ou", "pattern", "^app:(.+)$", "claim", "cf.app"));
+        Object audiences = List.of("sts.amazonaws.com", "workload/{cf.app}");
+        Object required = Map.of("cf.app", "app-guid");
+        Map<String, Object> info = Map.of(
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CA, EXAMPLE_CA,
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CLAIM_MAPPINGS,
+                jsonEncoded ? JsonUtils.writeValueAsString(mappings) : mappings,
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_AUD_TEMPLATES,
+                jsonEncoded ? JsonUtils.writeValueAsString(audiences) : audiences,
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_REQUIRED_CLAIMS,
+                jsonEncoded ? JsonUtils.writeValueAsString(required) : required,
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_SUB_TEMPLATE, "workload/{cf.app}",
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_TRUSTED_PROXY_CA, "proxy-pem");
+        TlsClientAuthConfiguration expected = new TlsClientAuthConfiguration(EXAMPLE_CA,
+                List.of(new TlsClientAuthConfiguration.ClaimMapping("subject_ou", "^app:(.+)$", "cf.app")));
+        expected.setSubTemplate("workload/{cf.app}");
+        expected.setAudTemplates(List.of("sts.amazonaws.com", "workload/{cf.app}"));
+        expected.setRequiredClaims(Map.of("cf.app", "app-guid"));
+        expected.setTrustedProxyCaPem("proxy-pem");
+
+        assertThat(TlsClientAuthConfiguration.fromAdditionalInformation(info)).isEqualTo(expected);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"tls-client-auth-claim-mappings", "tls-client-auth-aud-templates", "tls-client-auth-required-claims"})
+    void factoryReturnsNoPartialConfigurationForMalformedJson(String property) {
+        assertThat(TlsClientAuthConfiguration.fromAdditionalInformation(Map.of(
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CA, EXAMPLE_CA, property, "[invalid"))).isNull();
+    }
+
+    @Test
+    void factoryRequiresFlatCaStringAndNormalizesBlankOptionalStrings() {
+        assertThat(TlsClientAuthConfiguration.fromAdditionalInformation(null)).isNull();
+        assertThat(TlsClientAuthConfiguration.fromAdditionalInformation(Map.of())).isNull();
+        assertThat(TlsClientAuthConfiguration.fromAdditionalInformation(Map.of(
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CA, Map.of("ca", EXAMPLE_CA)))).isNull();
+        var config = TlsClientAuthConfiguration.fromAdditionalInformation(Map.of(
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CA, EXAMPLE_CA,
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_SUB_TEMPLATE, "   ",
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_TRUSTED_PROXY_CA, "\t"));
+        assertThat(config).isEqualTo(new TlsClientAuthConfiguration(EXAMPLE_CA, null));
+    }
 
     @Test
     void roundTripsViaJson() throws Exception {

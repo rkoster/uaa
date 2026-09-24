@@ -16,7 +16,6 @@ package org.cloudfoundry.identity.uaa.authentication;
 import org.cloudfoundry.identity.uaa.client.InvalidClientDetailsException;
 import org.cloudfoundry.identity.uaa.client.TlsClientAuthConfiguration;
 import org.cloudfoundry.identity.uaa.client.UaaClient;
-import org.cloudfoundry.identity.uaa.util.JsonUtils;
 import org.cloudfoundry.identity.uaa.oauth.jwt.JwtClientAuthentication;
 import org.cloudfoundry.identity.uaa.oauth.pkce.PkceValidationService;
 import org.cloudfoundry.identity.uaa.oauth.tls.TlsClientAuthentication;
@@ -34,11 +33,9 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.util.ObjectUtils;
 import org.springframework.util.StringUtils;
 
-import tools.jackson.core.type.TypeReference;
 
 import java.security.cert.X509Certificate;
 import java.util.Collections;
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -227,68 +224,6 @@ public class ClientDetailsAuthenticationProvider extends DaoAuthenticationProvid
     }
 
     static TlsClientAuthConfiguration getTlsClientAuthConfiguration(UaaClient uaaClient) {
-        Map<String, Object> info = uaaClient.getAdditionalInformation();
-        if (info == null) {
-            return null;
-        }
-        Object rawConfig = info.get(TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CA);
-        if (rawConfig instanceof String pem) {
-            try {
-                List<TlsClientAuthConfiguration.ClaimMapping> claimMappings = null;
-                Object rawMappings = info.get(TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CLAIM_MAPPINGS);
-                if (rawMappings instanceof String mappingsJson) {
-                    claimMappings = JsonUtils.readValue(mappingsJson,
-                            new TypeReference<List<TlsClientAuthConfiguration.ClaimMapping>>() {});
-                } else if (rawMappings instanceof List<?> mappingsList) {
-                    // Jackson may parse a JSON array directly as a List when additionalInformation
-                    // is deserialized from JDBC without a String-encoded wrapper.
-                    String mappingsJson = JsonUtils.writeValueAsString(mappingsList);
-                    claimMappings = JsonUtils.readValue(mappingsJson,
-                            new TypeReference<List<TlsClientAuthConfiguration.ClaimMapping>>() {});
-                }
-                String subTemplate = null;
-                Object rawSubTemplate = info.get(TlsClientAuthConfiguration.TLS_CLIENT_AUTH_SUB_TEMPLATE);
-                if (rawSubTemplate instanceof String st && !st.isBlank()) {
-                    subTemplate = st;
-                }
-
-                List<String> audTemplates = null;
-                Object rawAudTemplates = info.get(TlsClientAuthConfiguration.TLS_CLIENT_AUTH_AUD_TEMPLATES);
-                if (rawAudTemplates instanceof String audJson) {
-                    audTemplates = JsonUtils.readValue(audJson, new TypeReference<List<String>>() {});
-                } else if (rawAudTemplates instanceof List<?> audList) {
-                    audTemplates = JsonUtils.readValue(
-                            JsonUtils.writeValueAsString(audList),
-                            new TypeReference<List<String>>() {});
-                }
-
-                String trustedProxyCaPem = null;
-                Object rawTrustedProxyCa = info.get(TlsClientAuthConfiguration.TLS_CLIENT_AUTH_TRUSTED_PROXY_CA);
-                if (rawTrustedProxyCa instanceof String tpc && !tpc.isBlank()) {
-                    trustedProxyCaPem = tpc;
-                }
-
-                Map<String, String> requiredClaims = null;
-                Object rawRequiredClaims = info.get(TlsClientAuthConfiguration.TLS_CLIENT_AUTH_REQUIRED_CLAIMS);
-                if (rawRequiredClaims instanceof String requiredClaimsJson) {
-                    requiredClaims = JsonUtils.readValue(requiredClaimsJson,
-                            new TypeReference<Map<String, String>>() {});
-                } else if (rawRequiredClaims instanceof Map<?, ?> requiredClaimsMap) {
-                    requiredClaims = JsonUtils.readValue(
-                            JsonUtils.writeValueAsString(requiredClaimsMap),
-                            new TypeReference<Map<String, String>>() {});
-                }
-
-                TlsClientAuthConfiguration cfg = new TlsClientAuthConfiguration(pem, claimMappings);
-                cfg.setSubTemplate(subTemplate);
-                cfg.setAudTemplates(audTemplates);
-                cfg.setTrustedProxyCaPem(trustedProxyCaPem);
-                cfg.setRequiredClaims(requiredClaims);
-                return cfg;
-            } catch (Exception e) {
-                return null;
-            }
-        }
-        return null;
+        return TlsClientAuthConfiguration.fromAdditionalInformation(uaaClient.getAdditionalInformation());
     }
 }

@@ -11,6 +11,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.cloudfoundry.identity.uaa.util.JsonUtils;
 import org.mockito.ArgumentCaptor;
 
 import javax.security.auth.x500.X500Principal;
@@ -495,6 +496,44 @@ class MtlsClaimsEnhancerTest {
         verify(tlsClientAuthentication).getCertificateFromRequest(configCaptor.capture());
         assertThat(configCaptor.getValue().getTrustedProxyCaPem())
                 .isEqualTo("-----BEGIN CERTIFICATE-----\nMIIBproxy\n-----END CERTIFICATE-----\n");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void readsCompleteTlsConfigurationFromNativeOrJsonValues(boolean jsonEncoded) throws Exception {
+        X509Certificate cert = mockCfCert();
+        when(tlsClientAuthentication.hasCertificateFromRequest()).thenReturn(true);
+        doReturn(cert).when(tlsClientAuthentication).getCertificateFromRequest(any());
+        Object mappings = List.of(Map.of("field", "subject_cn", "claim", "app"));
+        Object audiences = List.of("sts.amazonaws.com", "workload/{app}");
+        Object requiredClaims = Map.of("app", "inst-guid");
+        UaaClientDetails client = new UaaClientDetails();
+        client.setClientId("instance-identity");
+        client.setAdditionalInformation(Map.of(
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CA, "ca-pem",
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_TRUSTED_PROXY_CA, "proxy-pem",
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_SUB_TEMPLATE, "workload/{app}",
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CLAIM_MAPPINGS,
+                jsonEncoded ? JsonUtils.writeValueAsString(mappings) : mappings,
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_AUD_TEMPLATES,
+                jsonEncoded ? JsonUtils.writeValueAsString(audiences) : audiences,
+                TlsClientAuthConfiguration.TLS_CLIENT_AUTH_REQUIRED_CLAIMS,
+                jsonEncoded ? JsonUtils.writeValueAsString(requiredClaims) : requiredClaims));
+        when(clientDetailsService.loadClientByClientId("instance-identity")).thenReturn(client);
+        TlsClientAuthConfiguration expected = new TlsClientAuthConfiguration("ca-pem",
+                List.of(new TlsClientAuthConfiguration.ClaimMapping("subject_cn", null, "app")));
+        expected.setTrustedProxyCaPem("proxy-pem");
+        expected.setSubTemplate("workload/{app}");
+        expected.setAudTemplates(List.of("sts.amazonaws.com", "workload/{app}"));
+        expected.setRequiredClaims(Map.of("app", "inst-guid"));
+
+        Map<String, Object> result = enhancer.enhance(Map.of(), mockAuthentication("instance-identity"));
+
+        ArgumentCaptor<TlsClientAuthConfiguration> config = ArgumentCaptor.forClass(TlsClientAuthConfiguration.class);
+        verify(tlsClientAuthentication).getCertificateFromRequest(config.capture());
+        assertThat(config.getValue()).isEqualTo(expected);
+        assertThat(result).containsEntry("sub", "workload/inst-guid")
+                .containsEntry("aud", List.of("sts.amazonaws.com", "workload/inst-guid")).containsKey("cnf");
     }
 
     @Test

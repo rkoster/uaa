@@ -4,6 +4,8 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import org.cloudfoundry.identity.uaa.oauth.token.ClaimConstants;
+import org.cloudfoundry.identity.uaa.util.JsonUtils;
+import tools.jackson.core.type.TypeReference;
 
 import java.util.List;
 import java.util.Map;
@@ -100,6 +102,44 @@ public class TlsClientAuthConfiguration {
 
     public static boolean isConfigured(TlsClientAuthConfiguration config) {
         return config != null && config.getTrustedCaPem() != null && !config.getTrustedCaPem().isBlank();
+    }
+
+    /**
+     * Reads the flat client metadata used by both authentication and token enhancement.
+     * Structured properties accept native collections or JSON strings. Returns null when
+     * no string CA is configured or JSON decoding fails; certificate and policy validation
+     * remain the caller's responsibility.
+     */
+    public static TlsClientAuthConfiguration fromAdditionalInformation(Map<String, Object> info) {
+        if (info == null || !(info.get(TLS_CLIENT_AUTH_CA) instanceof String pem)) {
+            return null;
+        }
+        try {
+            TlsClientAuthConfiguration config = new TlsClientAuthConfiguration(pem,
+                    readStructuredValue(info.get(TLS_CLIENT_AUTH_CLAIM_MAPPINGS), List.class,
+                            new TypeReference<List<ClaimMapping>>() {}));
+            config.setSubTemplate(nonblankString(info.get(TLS_CLIENT_AUTH_SUB_TEMPLATE)));
+            config.setAudTemplates(readStructuredValue(info.get(TLS_CLIENT_AUTH_AUD_TEMPLATES), List.class,
+                    new TypeReference<List<String>>() {}));
+            config.setTrustedProxyCaPem(nonblankString(info.get(TLS_CLIENT_AUTH_TRUSTED_PROXY_CA)));
+            config.setRequiredClaims(readStructuredValue(info.get(TLS_CLIENT_AUTH_REQUIRED_CLAIMS), Map.class,
+                    new TypeReference<Map<String, String>>() {}));
+            return config;
+        } catch (JsonUtils.JsonUtilException e) {
+            return null;
+        }
+    }
+
+    private static <T> T readStructuredValue(Object raw, Class<?> nativeType, TypeReference<T> type) {
+        if (raw instanceof String json) {
+            return JsonUtils.readValue(json, type);
+        }
+        return nativeType.isInstance(raw)
+                ? JsonUtils.readValue(JsonUtils.writeValueAsString(raw), type) : null;
+    }
+
+    private static String nonblankString(Object raw) {
+        return raw instanceof String value && !value.isBlank() ? value : null;
     }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)

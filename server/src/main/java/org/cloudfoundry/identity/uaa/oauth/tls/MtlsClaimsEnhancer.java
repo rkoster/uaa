@@ -6,11 +6,9 @@ import org.cloudfoundry.identity.uaa.constants.ClientAuthentication;
 import org.cloudfoundry.identity.uaa.oauth.UaaTokenEnhancer;
 import org.cloudfoundry.identity.uaa.oauth.provider.ClientDetailsService;
 import org.cloudfoundry.identity.uaa.oauth.provider.OAuth2Authentication;
-import org.cloudfoundry.identity.uaa.util.JsonUtils;
 import org.cloudfoundry.identity.uaa.util.UaaSecurityContextUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
-import tools.jackson.core.type.TypeReference;
 
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -47,10 +45,9 @@ public class MtlsClaimsEnhancer implements UaaTokenEnhancer {
      * Bounds template length before it reaches {@link #PLACEHOLDER}'s regex -- see
      * {@link org.cloudfoundry.identity.uaa.client.ClientAdminEndpointsValidator}'s
      * {@code MAX_TEMPLATE_LENGTH} javadoc for the full rationale (same value, duplicated here
-     * because the two classes are in different packages/modules; kept in sync by convention,
-     * same as {@code PLACEHOLDER} itself). This guard is defense-in-depth for clients configured
-     * via the BOSH-flat-config bootstrap path ({@link #loadTlsConfig}), which bypasses
-     * ClientAdminEndpointsValidator's admin-API-time validation entirely.
+     * because the two classes are in different packages; kept in sync by convention,
+     * same as {@code PLACEHOLDER} itself). This guard also applies if invalid stored configuration
+     * reaches token generation despite configuration-time validation.
      */
     static final int MAX_TEMPLATE_LENGTH = 256;
 
@@ -97,12 +94,8 @@ public class MtlsClaimsEnhancer implements UaaTokenEnhancer {
         String clientId = authentication.getOAuth2Request().getClientId();
         UaaClientDetails clientDetails = (UaaClientDetails) clientDetailsService.loadClientByClientId(clientId);
 
-        // Check the typed field first (set directly on in-memory / admin-API clients);
-        // fall back to additionalInformation for JDBC-loaded clients.
-        TlsClientAuthConfiguration config = clientDetails.getTlsClientAuthConfiguration();
-        if (config == null) {
-            config = loadTlsConfig(clientDetails.getAdditionalInformation());
-        }
+        TlsClientAuthConfiguration config =
+                TlsClientAuthConfiguration.fromAdditionalInformation(clientDetails.getAdditionalInformation());
         if (!TlsClientAuthConfiguration.isConfigured(config)) {
             return new HashMap<>();
         }
@@ -226,74 +219,4 @@ public class MtlsClaimsEnhancer implements UaaTokenEnhancer {
         return sb.toString();
     }
 
-    /**
-     * Builds a {@link TlsClientAuthConfiguration} from the client's {@code additionalInformation} map.
-     * Reads the documented flat configuration from a DB-loaded client's additional information.
-     */
-    private static TlsClientAuthConfiguration loadTlsConfig(Map<String, Object> info) {
-        if (info == null) {
-            return null;
-        }
-        Object raw = info.get(TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CA);
-        if (raw instanceof String pem) {
-            try {
-                List<TlsClientAuthConfiguration.ClaimMapping> claimMappings = null;
-                Object rawMappings = info.get(TlsClientAuthConfiguration.TLS_CLIENT_AUTH_CLAIM_MAPPINGS);
-                if (rawMappings instanceof String mappingsJson) {
-                    claimMappings = JsonUtils.readValue(mappingsJson,
-                            new TypeReference<List<TlsClientAuthConfiguration.ClaimMapping>>() {});
-                } else if (rawMappings instanceof List<?> mappingsList) {
-                    // Jackson may parse a JSON array directly as a List when additionalInformation
-                    // is deserialized from JDBC without a String-encoded wrapper.
-                    String mappingsJson = JsonUtils.writeValueAsString(mappingsList);
-                    claimMappings = JsonUtils.readValue(mappingsJson,
-                            new TypeReference<List<TlsClientAuthConfiguration.ClaimMapping>>() {});
-                }
-                String subTemplate = null;
-                Object rawSubTemplate = info.get(TlsClientAuthConfiguration.TLS_CLIENT_AUTH_SUB_TEMPLATE);
-                if (rawSubTemplate instanceof String st && !st.isBlank()) {
-                    subTemplate = st;
-                }
-
-                List<String> audTemplates = null;
-                Object rawAudTemplates = info.get(TlsClientAuthConfiguration.TLS_CLIENT_AUTH_AUD_TEMPLATES);
-                if (rawAudTemplates instanceof String audJson) {
-                    audTemplates = JsonUtils.readValue(audJson, new TypeReference<List<String>>() {});
-                } else if (rawAudTemplates instanceof List<?> audList) {
-                    // Jackson may deserialise a JSON array as a List when additionalInformation
-                    // is loaded from JDBC without a String-encoded wrapper.
-                    audTemplates = JsonUtils.readValue(
-                            JsonUtils.writeValueAsString(audList),
-                            new TypeReference<List<String>>() {});
-                }
-
-                String trustedProxyCaPem = null;
-                Object rawTrustedProxyCa = info.get(TlsClientAuthConfiguration.TLS_CLIENT_AUTH_TRUSTED_PROXY_CA);
-                if (rawTrustedProxyCa instanceof String tpc && !tpc.isBlank()) {
-                    trustedProxyCaPem = tpc;
-                }
-
-                Map<String, String> requiredClaims = null;
-                Object rawRequiredClaims = info.get(TlsClientAuthConfiguration.TLS_CLIENT_AUTH_REQUIRED_CLAIMS);
-                if (rawRequiredClaims instanceof String requiredClaimsJson) {
-                    requiredClaims = JsonUtils.readValue(requiredClaimsJson,
-                            new TypeReference<Map<String, String>>() {});
-                } else if (rawRequiredClaims instanceof Map<?, ?> requiredClaimsMap) {
-                    requiredClaims = JsonUtils.readValue(
-                            JsonUtils.writeValueAsString(requiredClaimsMap),
-                            new TypeReference<Map<String, String>>() {});
-                }
-
-                TlsClientAuthConfiguration cfg = new TlsClientAuthConfiguration(pem, claimMappings);
-                cfg.setSubTemplate(subTemplate);
-                cfg.setAudTemplates(audTemplates);
-                cfg.setTrustedProxyCaPem(trustedProxyCaPem);
-                cfg.setRequiredClaims(requiredClaims);
-                return cfg;
-            } catch (Exception e) {
-                return null;
-            }
-        }
-        return null;
-    }
 }
